@@ -12,7 +12,6 @@
   "dependencies": {
     "@skipruntime/core": "^0.0.19",
     "@skipruntime/helpers": "^0.0.19",
-    "@skipruntime/native": "^0.0.19",
     "@skipruntime/server": "^0.0.19",
     "@skipruntime/wasm": "^0.0.19"
   }
