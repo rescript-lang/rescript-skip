@@ -11,6 +11,8 @@ function readFirstSSE(prim) {
   return SkipruntimeCoreHelpersMjs.readFirstSSE(prim);
 }
 
+let localhost = "127.0.0.1";
+
 async function run() {
   console.log("live client: starting wasm service on ports 18080/18081…");
   let server = await SkipruntimeServer.Natural.runService(service, {
@@ -21,7 +23,7 @@ async function run() {
   });
   console.log("live client: service started");
   let broker = new Helpers.SkipServiceBroker({
-    host: "127.0.0.1",
+    host: localhost,
     streaming_port: 18081,
     control_port: 18080,
     secured: undefined
@@ -41,7 +43,7 @@ async function run() {
   let after = await broker.getAll("echo", null);
   console.log("live client: after update getAll", after);
   let uuid = await broker.getStreamUUID("echo", null);
-  let streamUrl = `http://127.0.0.1:` + (18081).toString() + `/v1/streams/` + uuid;
+  let streamUrl = `http://` + localhost + `:` + (18081).toString() + `/v1/streams/` + uuid;
   console.log("live client: subscribing to", streamUrl);
   let ssePromise = SkipruntimeCoreHelpersMjs.readFirstSSE(streamUrl);
   await broker.update("input", [[
@@ -59,6 +61,7 @@ run();
 export {
   service,
   readFirstSSE,
+  localhost,
   run,
 }
 /* service Not a pure module */

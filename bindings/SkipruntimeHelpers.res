@@ -12,11 +12,11 @@ type broker
 @module("@skipruntime/helpers")
 @new external make: (entrypoint, option<int>) => broker = "SkipServiceBroker"
 
-@send external getAll: (broker, string, json) => promise<array<entry<json, json>>> =
+@send external getAll: (broker, string, JSON.t) => promise<array<entry<JSON.t, JSON.t>>> =
   "getAll"
 
-@send external update: (broker, string, array<entry<json, json>>) => promise<unit> =
+@send external update: (broker, string, array<entry<JSON.t, JSON.t>>) => promise<unit> =
   "update"
 
-@send external getStreamUUID: (broker, string, json) => promise<string> =
+@send external getStreamUUID: (broker, string, JSON.t) => promise<string> =
   "getStreamUUID"

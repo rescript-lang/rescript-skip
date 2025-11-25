@@ -56,11 +56,14 @@ node examples/LiveClient.res.js
 **Expected output:**
 ```
 live client: starting wasm service on ports 18080/18081…
+live client: service started
 live client: initial getAll [ [ 'foo', [ 'bar' ] ] ]
 live client: after update getAll [ [ 'bar', [ 'qux' ] ], [ 'foo', [ 'baz' ] ] ]
+live client: subscribing to http://127.0.0.1:18081/v1/streams/...
 live client: SSE chunk event: init
 id: …
 data: [["bar",["qux"]],["foo",["baz"]],["sse",["ping"]]]
+live client: service closed
 ```
 
 Notice: We never wrote code to update `echo`. It happened automatically when `input` changed.
@@ -82,4 +85,4 @@ The Skip runtime handles all the plumbing—dependency tracking, incremental rec
 
 ## The bottom line
 
-Reactive back-ends let you **declare what should happen**, not **how to make it happen**. You avoid manually wiring update logic, and clients never see stale data. This example shows the concept end-to-end in ~50 lines of actual service code.
+Reactive back-ends let you **declare what should happen**, not **how to make it happen**. You avoid manually wiring update logic, and clients never see stale data. This example shows the concept end-to-end in ~80 lines of actual service and client code.

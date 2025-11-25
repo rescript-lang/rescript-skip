@@ -1,8 +1,8 @@
-open SkipruntimeCore
-
-@module("./LiveService.mjs") external service: skipService = "service"
+@module("./LiveService.mjs") external service: SkipruntimeCore.skipService = "service"
 @module("../bindings/SkipruntimeCoreHelpers.mjs")
 external readFirstSSE: string => promise<string> = "readFirstSSE"
+
+let localhost = "127.0.0.1"
 
 let run = async () => {
   let opts: SkipruntimeServer.runOptions = {
@@ -19,7 +19,7 @@ let run = async () => {
   let broker =
     SkipruntimeHelpers.make(
       {
-        host: "127.0.0.1",
+        host: localhost,
         streaming_port: opts.streaming_port,
         control_port: opts.control_port,
         secured: None,
@@ -44,7 +44,7 @@ let run = async () => {
   // SSE subscription: read first event from the echo stream
   let uuid = await SkipruntimeHelpers.getStreamUUID(broker, "echo", JSON.Null)
   let streamUrl =
-    `http://127.0.0.1:${opts.streaming_port->Int.toString}/v1/streams/${uuid}`
+    `http://${localhost}:${opts.streaming_port->Int.toString}/v1/streams/${uuid}`
   Console.log2("live client: subscribing to", streamUrl)
   let ssePromise = readFirstSSE(streamUrl)
 

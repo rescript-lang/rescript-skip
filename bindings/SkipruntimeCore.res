@@ -1,5 +1,4 @@
-type json = JSON.t
-type depSafe = json
+type depSafe = JSON.t
 type watermark = string
 type entry<'k, 'v> = ('k, array<'v>)
 type collectionUpdate<'k, 'v> = {
@@ -21,7 +20,7 @@ type params = array<depSafe>
 type externalResource = {
   service: string,
   identifier: string,
-  params: option<json>,
+  params: option<JSON.t>,
 }
 type values<'v>
 type mapperClass<'k, 'v, 'k2, 'v2>
@@ -220,7 +219,7 @@ module Context = {
   external useExternalResource: (t, externalResource) => eager<'k, 'v> =
     "useExternalResource"
 
-  @send external jsonExtract: (t, JSON.t, string) => array<json> = "jsonExtract"
+  @send external jsonExtract: (t, JSON.t, string) => array<JSON.t> = "jsonExtract"
 }
 
 module ServiceDefinition = {
@@ -229,15 +228,15 @@ module ServiceDefinition = {
   @module("@skipruntime/core")
   @new external make: skipService => t = "ServiceDefinition"
 
-  @send external buildResource: (t, string, json) => jsObject = "buildResource"
+  @send external buildResource: (t, string, JSON.t) => jsObject = "buildResource"
   @send external inputs: t => array<string> = "inputs"
   @send external resources: t => array<string> = "resources"
-  @send external initialData: (t, string) => array<entry<json, json>> =
+  @send external initialData: (t, string) => array<entry<JSON.t, JSON.t>> =
     "initialData"
 
   @send
-  external createGraph: (t, dict<eager<json, json>>, context) => dict<
-    eager<json, json>
+  external createGraph: (t, dict<eager<JSON.t, JSON.t>>, context) => dict<
+    eager<JSON.t, JSON.t>
   > = "createGraph"
 
   @send
@@ -247,7 +246,7 @@ module ServiceDefinition = {
     jsObject,
     string,
     string,
-    json
+    JSON.t
   ) => promise<unit> = "subscribe"
 
   @send external unsubscribe: (t, string, string) => unit = "unsubscribe"
@@ -268,15 +267,15 @@ module ServiceInstance = {
   type t = serviceInstance
 
   @send
-  external instantiateResource: (t, string, string, json) => promise<unit> =
+  external instantiateResource: (t, string, string, JSON.t) => promise<unit> =
     "instantiateResource"
 
   @send
-  external getAll: (t, string, option<json>) => promise<array<entry<json, json>>> =
+  external getAll: (t, string, option<JSON.t>) => promise<array<entry<JSON.t, JSON.t>>> =
     "getAll"
 
   @send
-  external getArray: (t, string, json, option<json>) => promise<array<json>> =
+  external getArray: (t, string, JSON.t, option<JSON.t>) => promise<array<JSON.t>> =
     "getArray"
 
   @send external closeResourceInstance: (t, string) => unit = "closeResourceInstance"
@@ -292,7 +291,7 @@ module ServiceInstance = {
   @send external unsubscribe: (t, subscriptionId) => unit = "unsubscribe"
 
   @send
-  external update: (t, string, array<entry<json, json>>) => promise<unit> =
+  external update: (t, string, array<entry<JSON.t, JSON.t>>) => promise<unit> =
     "update"
 
   @send external close: t => promise<unit> = "close"
