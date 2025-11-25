@@ -1,0 +1,19 @@
+{
+  "name": "rescript-skip",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "rescript build",
+    "clean": "rescript clean"
+  },
+  "devDependencies": {
+    "rescript": "12.0.0-rc.5"
+  },
+  "dependencies": {
+    "@skipruntime/core": "^0.0.19",
+    "@skipruntime/helpers": "^0.0.19",
+    "@skipruntime/native": "^0.0.19",
+    "@skipruntime/server": "^0.0.19",
+    "@skipruntime/wasm": "^0.0.19"
+  }
+}

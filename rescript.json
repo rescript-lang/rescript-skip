@@ -1,0 +1,20 @@
+{
+  "name": "rescript-skip",
+  "package-specs": [
+    {
+      "module": "esmodule",
+      "in-source": true
+    }
+  ],
+  "suffix": ".res.js",
+  "sources": [
+    {
+      "dir": "bindings",
+      "subdirs": true
+    },
+    {
+      "dir": "examples",
+      "subdirs": true
+    }
+  ]
+}
