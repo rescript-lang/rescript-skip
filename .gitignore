@@ -1,0 +1,9 @@
+# Node modules
+node_modules/
+
+# Build outputs
+lib/
+*.bs.js
+*.cmj
+*.cmi
+*.rei
