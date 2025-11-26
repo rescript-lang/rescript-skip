@@ -138,6 +138,10 @@ let Context = {
   readFirstSSE: readFirstSSE
 };
 
+function subscribeSSE(prim0, prim1) {
+  return SkipruntimeCoreHelpersMjs.subscribeSSE(prim0, prim1);
+}
+
 let ServiceDefinition = {};
 
 let ServiceInstanceFactory = {};
@@ -284,6 +288,7 @@ export {
   Notifier,
   ChangeManager,
   Context,
+  subscribeSSE,
   ServiceDefinition,
   ServiceInstanceFactory,
   ServiceInstance,

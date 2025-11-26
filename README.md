@@ -155,10 +155,14 @@ Skip's reactivity is *per collection and per key*. When any upstream key changes
 
 ### Client-side O(1) alternative
 
-For truly O(1) aggregates, maintain them client-side:
+For truly O(1) aggregates, subscribe to the reactive collection via SSE and maintain the aggregate client-side:
 
 ```rescript
-// In ClientSum module
+// Subscribe to SSE stream for numbers collection
+let streamUrl = await Client.getStreamUrl(opts, broker, "numbers")
+ClientSum.subscribe(streamUrl)
+
+// In ClientSum module: O(1) update when SSE delivers changes
 let applyUpdate = (key, newValue) => {
   let oldValue = state.numbers->Dict.get(key)->Option.getOr(0.)
   state.total = state.total -. oldValue +. newValue
@@ -166,7 +170,7 @@ let applyUpdate = (key, newValue) => {
 }
 ```
 
-The harness includes a `ClientSum` module that demonstrates this pattern. It stays in sync with the reactive `numbers` collection but computes the total in O(1) per update.
+The harness includes a `ClientSum` module that subscribes to `numbers` via SSE. When the server pushes updates, the client applies them in O(1) time—no polling, no re-fetching the whole collection.
 
 Run:
 
@@ -175,10 +179,10 @@ npm run build && node examples/LiveHarness.res.js
 ```
 
 ## What else is in the repo
-- **Bindings**: `bindings/Skipruntime*.res` plus `bindings/SkipruntimeCoreHelpers.mjs` (class constructors, enums, SSE helper).
+- **Bindings**: `bindings/Skipruntime*.res` plus `bindings/SkipruntimeCoreHelpers.mjs` (class constructors, enums, SSE helpers including `subscribeSSE` for streaming updates).
 - **`examples/Example.res`**: Tiny binding smoke (LoadStatus, error ctor, mapper/reducer wiring) without starting the runtime.
 - **`examples/NotifierExample.res`**: Demonstrates notifier callbacks receiving collection updates and watermarks without wiring a full service.
-- **`examples/LiveHarness.res` + `LiveHarnessService.*`**: Demonstrates `map` and `reduce` semantics with `numbers`, `doubled`, and `sum` resources, plus a client-side O(1) accumulator. Shows how reducers process full old/new slices and why client-side aggregates are better for O(1) updates.
+- **`examples/LiveHarness.res` + `LiveHarnessService.*`**: Demonstrates `map` and `reduce` semantics with `numbers`, `doubled`, and `sum` resources. Includes a client-side O(1) accumulator that subscribes to SSE to receive updates—showing how to layer efficient aggregates on top of reactive data.
 - **`examples/LiveService.*`**: The minimal reactive service definition used by `LiveClient.res` (typed in TS, emitted as JS). Service files are TS for class-heavy definitions and type checks; compiled JS is used at runtime.
 
 ## The bottom line

@@ -228,6 +228,12 @@ module Context = {
   external readFirstSSE: string => promise<string> = "readFirstSSE"
 }
 
+// SSE subscription handle with close method.
+type sseSubscription = {close: unit => unit}
+
+@module("./SkipruntimeCoreHelpers.mjs")
+external subscribeSSE: (string, JSON.t => unit) => sseSubscription = "subscribeSSE"
+
 module ServiceDefinition = {
   type t = serviceDefinition
 

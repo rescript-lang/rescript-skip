@@ -109,3 +109,59 @@ export async function readFirstSSE(url) {
   if (done || !value) return "";
   return decoder.decode(value);
 }
+
+// SSE stream subscription that calls onUpdate for each data event.
+// Returns an object with { close: () => void } to stop the stream.
+// onUpdate receives parsed JSON data from SSE "data:" lines.
+export function subscribeSSE(url, onUpdate) {
+  const controller = new AbortController();
+  let buffer = "";
+
+  const processLines = (text) => {
+    buffer += text;
+    const lines = buffer.split("\n");
+    // Keep incomplete last line in buffer
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        try {
+          const jsonStr = line.slice(6); // Remove "data: " prefix
+          const data = JSON.parse(jsonStr);
+          onUpdate(data);
+        } catch (e) {
+          // Ignore parse errors (e.g., empty data lines)
+        }
+      }
+    }
+  };
+
+  const run = async () => {
+    try {
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: { Accept: "text/event-stream" },
+      });
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        processLines(decoder.decode(value, { stream: true }));
+      }
+    } catch (e) {
+      // AbortError is expected when close() is called
+      if (e.name !== "AbortError") {
+        console.error("SSE error:", e);
+      }
+    }
+  };
+
+  // Start reading in background
+  run();
+
+  return {
+    close: () => controller.abort(),
+  };
+}

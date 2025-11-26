@@ -44,41 +44,26 @@ module Client = {
 
   let updateInput = (broker, entries) =>
     SkipruntimeHelpers.update(broker, "numbers", entries)
+
+  let getStreamUrl = async (opts: SkipruntimeServer.runOptions, broker, resource) => {
+    let uuid = await SkipruntimeHelpers.getStreamUUID(broker, resource, JSON.Null)
+    `http://${localhost}:${opts.streaming_port->Int.toString}/v1/streams/${uuid}`
+  }
 }
 
 // Client-side O(1) incremental sum.
-// Demonstrates how to layer efficient aggregates on top of reactive data.
+// Subscribes to SSE stream and applies updates as they arrive.
 module ClientSum = {
   type state = {
     mutable total: float,
     mutable numbers: Dict.t<float>,
+    mutable subscription: option<SkipruntimeCore.sseSubscription>,
   }
 
   let state: state = {
     total: 0.,
     numbers: Dict.make(),
-  }
-
-  let init = () => {
-    // Must stay in sync with LiveHarnessService.initialData.numbers
-    let initialNumbers = [
-      ("a", 1.),
-      ("b", 2.),
-      ("c", 3.),
-      ("d", 4.),
-      ("e", 5.),
-      ("f", 6.),
-      ("g", 7.),
-      ("h", 8.),
-      ("i", 9.),
-      ("j", 10.),
-    ]
-
-    let numbers = Dict.fromArray(initialNumbers)
-    let total = initialNumbers->Array.reduce(0., (acc, (_k, v)) => acc +. v)
-
-    state.total = total
-    state.numbers = numbers
+    subscription: None,
   }
 
   // O(1) update: subtract old value, add new value.
@@ -87,6 +72,49 @@ module ClientSum = {
     state.total = state.total -. oldValue +. newValue
     state.numbers->Dict.set(key, newValue)
   }
+
+  // Parse SSE data: array of [key, [values]] entries.
+  // Apply each entry to update the local sum.
+  let handleSSEData = (data: JSON.t) => {
+    switch data {
+    | Array(entries) =>
+      entries->Array.forEach(entry => {
+        switch entry {
+        | Array([String(key), Array(values)]) =>
+          // Take first value if present
+          switch values[0] {
+          | Some(Number(v)) => applyUpdate(key, v)
+          | _ => ()
+          }
+        | _ => ()
+        }
+      })
+    | _ => ()
+    }
+  }
+
+  let subscribe = (streamUrl: string) => {
+    let sub = SkipruntimeCore.subscribeSSE(streamUrl, handleSSEData)
+    state.subscription = Some(sub)
+  }
+
+  let close = () => {
+    switch state.subscription {
+    | Some(sub) =>
+      sub.close()
+      state.subscription = None
+    | None => ()
+    }
+  }
+
+  let getTotal = () => state.total
+}
+
+// Small delay to let SSE events propagate.
+let delay = ms => {
+  Promise.make((resolve, _reject) => {
+    let _ = setTimeout(() => resolve(), ms)
+  })
 }
 
 let run = async () => {
@@ -96,9 +124,14 @@ let run = async () => {
 
   let broker = Client.makeBroker(Server.defaultOpts)
 
-  // Initialize client-side sum.
-  ClientSum.init()
-  Console.log2("harness: client sum (initial)", ClientSum.state.total)
+  // Subscribe to numbers via SSE - this initializes ClientSum from the stream.
+  let streamUrl = await Client.getStreamUrl(Server.defaultOpts, broker, "numbers")
+  Console.log2("harness: subscribing to SSE stream", streamUrl)
+  ClientSum.subscribe(streamUrl)
+
+  // Wait for initial SSE data to arrive.
+  await delay(100)
+  Console.log2("harness: client sum (from SSE)", ClientSum.getTotal())
 
   // Phase 1: Initial snapshot.
   Server.resetRunStats()
@@ -112,10 +145,10 @@ let run = async () => {
   await Client.snapshot(broker, "numbers", "harness: numbers after c→5")
   await Client.snapshot(broker, "doubled", "harness: doubled after c→5")
   await Client.snapshot(broker, "sum", "harness: sum after c→5")
-  ClientSum.applyUpdate("c", 5.)
-  Console.log2("harness: client sum after c→5", ClientSum.state.total)
+  Console.log2("harness: client sum after c→5 (from SSE)", ClientSum.getTotal())
   Console.log2("harness: counters after c→5", Server.getRunStats())
 
+  ClientSum.close()
   await Server.stop(server)
   Console.log("harness: service closed")
 }
