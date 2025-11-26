@@ -22,7 +22,7 @@ Status legend: `[ ]` = pending, `[~]` = in progress, `[x]` = done.
      - Enum mapping (LoadStatus round-trip).
      - Subscription callbacks via runtime (`ServiceInstance.subscribe` with notifier).
    - Goal: reuse the existing `LiveService`/client flow; add harness helpers to avoid duplicating LiveClient code across examples rather than spinning new services.
-   - Contract notes (for derived resources): service resources must return `EagerCollection` with entries as `[key, value]`; mappers emit `Iterable<[K,V]>` preserving keys; reducers handle nullable seeds/remove without throwing. Consider typing service files (TS) to enforce mapper/reducer `Iterable<[K,V]>` contracts.
+   - Contract notes (for derived resources): service resources must return `EagerCollection` with entries as `[key, value]`; mappers emit `Iterable<[K,V]>` preserving keys; reducers handle nullable seeds/remove without throwing. Services are written in TS to enforce mapper/reducer `Iterable<[K,V]>` contracts and avoid shape errors; `npm test` runs TS typecheck.
    - Verify: `rescript build && node <example>`; note commands for contributors.
 5) Documentation pass (pending)
    - [~] Update plan/README with usage, wasm vs native notes, engine expectations; run format/lint. Mention repo/package name (`rescript-skip`) and that compiler artifacts are intentionally checked in. Call out `npm test` runs the live client on ports 18080/18081`.

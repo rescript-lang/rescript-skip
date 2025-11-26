@@ -5,7 +5,8 @@
   "scripts": {
     "build": "rescript build",
     "clean": "rescript clean",
-    "test": "npm run build && node examples/LiveClient.res.js"
+    "test": "npm run build && npm run typecheck && node examples/LiveClient.res.js",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
