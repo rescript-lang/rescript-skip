@@ -83,7 +83,8 @@ The Skip runtime handles all the plumbing—dependency tracking, incremental rec
 - **Bindings**: `bindings/Skipruntime*.res` plus `bindings/SkipruntimeCoreHelpers.mjs` (class constructors, enums, SSE helper).
 - **`examples/Example.res`**: Tiny binding smoke (LoadStatus, error ctor, mapper/reducer wiring) without starting the runtime.
 - **`examples/NotifierExample.res`**: Demonstrates notifier callbacks receiving collection updates and watermarks without wiring a full service.
-- **`examples/LiveService.mjs`**: The minimal reactive service definition used by `LiveClient.res`.
+- **`examples/LiveHarness.res` + `LiveHarnessService.*`**: Mapper/reducer-driven service showing reactive snapshots (numbers → doubled → sum) without the SSE flow.
+- **`examples/LiveService.*`**: The minimal reactive service definition used by `LiveClient.res` (typed in TS, emitted as JS). Service files are TS for class-heavy definitions and type checks; compiled JS is used at runtime.
 
 ## The bottom line
 

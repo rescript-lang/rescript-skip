@@ -21,6 +21,8 @@ Status legend: `[ ]` = pending, `[~]` = in progress, `[x]` = done.
      - Option/nullable flows (e.g., context helpers, mapper/reducer params).
      - Enum mapping (LoadStatus round-trip).
      - Subscription callbacks via runtime (`ServiceInstance.subscribe` with notifier).
+   - Goal: reuse the existing `LiveService`/client flow; add harness helpers to avoid duplicating LiveClient code across examples rather than spinning new services.
+   - Contract notes (for derived resources): service resources must return `EagerCollection` with entries as `[key, value]`; mappers emit `Iterable<[K,V]>` preserving keys; reducers handle nullable seeds/remove without throwing. Consider typing service files (TS) to enforce mapper/reducer `Iterable<[K,V]>` contracts.
    - Verify: `rescript build && node <example>`; note commands for contributors.
 5) Documentation pass (pending)
    - [~] Update plan/README with usage, wasm vs native notes, engine expectations; run format/lint. Mention repo/package name (`rescript-skip`) and that compiler artifacts are intentionally checked in. Call out `npm test` runs the live client on ports 18080/18081`.
@@ -49,4 +51,5 @@ Status legend: `[ ]` = pending, `[~]` = in progress, `[x]` = done.
 - Bindings and helpers live under `bindings/`; examples under `examples/`. Compiler artifacts (`.res.js`) are intentionally checked in for clarity.
 - Extended bindings cover collections, context, service definition/instance factory + lifecycle, and a “Natural” wrapper layer; `rescript build` passes after type alignment to `CollectionUpdate`/`Watermark`/`DepSafe`.
 - Live example (`examples/LiveClient.res`) exercises mapper/reducer wiring, `getAll`/`update`, and SSE flow; `npm test` builds and runs this live client (ports 18080/18081). `Example.res` is a binding-only smoke check.
+- Harness example (`examples/LiveHarness.res` + `LiveHarnessService.*`) shows mapper/reducer-derived resources reacting to input updates; services are authored in TS for class-heavy definitions and type checking, emitted to JS for runtime use.
 - Future: add explicit tests for notifier/subscription callbacks and improve example robustness (shutdown on errors, SSE timeout/status handling), then refresh README/plan with current commands and naming.

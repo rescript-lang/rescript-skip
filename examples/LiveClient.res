@@ -1,5 +1,5 @@
 module Server = {
-  @module("./LiveService.mjs")
+  @module("./LiveService.js")
   external service: SkipruntimeCore.skipService = "service"
 
   let start = (opts: SkipruntimeServer.runOptions) =>
