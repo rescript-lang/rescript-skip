@@ -14,6 +14,11 @@ const log = (...args: unknown[]) => {
   if (ENABLE_LOGS) console.log(...args);
 };
 
+type Collections = {
+  numbers: EagerCollection<string, number>;
+  perKeySums: EagerCollection<string, number>;
+};
+
 // Mapper: multiply numeric values by 2, keep the same key.
 class DoubleMapper implements Mapper<string, number, string, number> {
   static runs = 0;
@@ -81,27 +86,67 @@ class SumReducerInc implements Reducer<number, number> {
   }
 }
 
-class NumbersResource implements Resource<{ numbers: EagerCollection<string, number> }> {
-  instantiate(collections: { numbers: EagerCollection<string, number> }): EagerCollection<string, number> {
+// Reducer for per-key sum: one accumulator per input key.
+class PerKeySumReducer implements Reducer<number, number> {
+  static runsAdd = 0;
+  static runsRemove = 0;
+  initial: number | null = 0;
+  add(acc: number | null, value: number): number {
+    PerKeySumReducer.runsAdd += 1;
+    log("reducer:perKeySum add", PerKeySumReducer.runsAdd);
+    return (acc ?? 0) + value;
+  }
+  remove(acc: number, value: number): number | null {
+    PerKeySumReducer.runsRemove += 1;
+    log("reducer:perKeySum remove", PerKeySumReducer.runsRemove);
+    return acc - value;
+  }
+}
+
+// Mapper: collapse per-key sums under a single "total" key.
+class ToTotalMapper implements Mapper<string, number, string, number> {
+  static runs = 0;
+  mapEntry(_key: string, values: Values<number>, _ctx: Context): Iterable<[string, number]> {
+    ToTotalMapper.runs += 1;
+    log("mapper:toTotal run", ToTotalMapper.runs);
+    const v = values.getUnique();
+    return [["total", v]];
+  }
+}
+
+class NumbersResource implements Resource<Collections> {
+  instantiate(collections: Collections): EagerCollection<string, number> {
     return collections.numbers;
   }
 }
 
-class DoubledResource implements Resource<{ numbers: EagerCollection<string, number> }> {
-  instantiate(collections: { numbers: EagerCollection<string, number> }): EagerCollection<string, number> {
+class DoubledResource implements Resource<Collections> {
+  instantiate(collections: Collections): EagerCollection<string, number> {
     return collections.numbers.map(DoubleMapper);
   }
 }
 
-class SumNaiveResource implements Resource<{ numbers: EagerCollection<string, number> }> {
-  instantiate(collections: { numbers: EagerCollection<string, number> }): EagerCollection<string, number> {
+class PerKeySumResource implements Resource<Collections> {
+  instantiate(collections: Collections): EagerCollection<string, number> {
+    return collections.perKeySums;
+  }
+}
+
+class SumNaiveResource implements Resource<Collections> {
+  instantiate(collections: Collections): EagerCollection<string, number> {
     return collections.numbers.map(TotalMapperNaive).reduce(SumReducerNaive);
   }
 }
 
-class SumIncResource implements Resource<{ numbers: EagerCollection<string, number> }> {
-  instantiate(collections: { numbers: EagerCollection<string, number> }): EagerCollection<string, number> {
+class SumIncResource implements Resource<Collections> {
+  instantiate(collections: Collections): EagerCollection<string, number> {
     return collections.numbers.map(TotalMapperInc).reduce(SumReducerInc);
+  }
+}
+
+class SumOfPerKeySumsResource implements Resource<Collections> {
+  instantiate(collections: Collections): EagerCollection<string, number> {
+    return collections.perKeySums.map(ToTotalMapper).reduce(SumReducerInc);
   }
 }
 
@@ -110,15 +155,28 @@ export const service: SkipService = {
     numbers: [
       ["a", [1]],
       ["b", [2]],
+      ["c", [3]],
+      ["d", [4]],
+      ["e", [5]],
+      ["f", [6]],
+      ["g", [7]],
+      ["h", [8]],
+      ["i", [9]],
+      ["j", [10]],
     ],
   },
   resources: {
     numbers: NumbersResource,
     doubled: DoubledResource,
+    perKeySums: PerKeySumResource,
     sumNaive: SumNaiveResource,
     sumInc: SumIncResource,
+    sumOfPerKeySums: SumOfPerKeySumsResource,
   },
-  createGraph: (inputs) => inputs,
+  createGraph: (inputs) => {
+    const perKeySums = inputs.numbers.reduce(PerKeySumReducer);
+    return { ...inputs, perKeySums };
+  },
 };
 
 export const resetRunStats = () => {
@@ -129,6 +187,9 @@ export const resetRunStats = () => {
   TotalMapperInc.runs = 0;
   SumReducerInc.runsAdd = 0;
   SumReducerInc.runsRemove = 0;
+  PerKeySumReducer.runsAdd = 0;
+  PerKeySumReducer.runsRemove = 0;
+  ToTotalMapper.runs = 0;
 };
 
 export const getRunStats = () => ({
@@ -139,4 +200,7 @@ export const getRunStats = () => ({
   totalIncMapperRuns: TotalMapperInc.runs,
   sumIncAddRuns: SumReducerInc.runsAdd,
   sumIncRemoveRuns: SumReducerInc.runsRemove,
+  perKeySumAddRuns: PerKeySumReducer.runsAdd,
+  perKeySumRemoveRuns: PerKeySumReducer.runsRemove,
+  toTotalMapperRuns: ToTotalMapper.runs,
 });

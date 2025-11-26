@@ -69,6 +69,34 @@ class SumReducerInc {
 }
 SumReducerInc.runsAdd = 0;
 SumReducerInc.runsRemove = 0;
+// Reducer for per-key sum: one accumulator per input key.
+class PerKeySumReducer {
+    constructor() {
+        this.initial = 0;
+    }
+    add(acc, value) {
+        PerKeySumReducer.runsAdd += 1;
+        log("reducer:perKeySum add", PerKeySumReducer.runsAdd);
+        return (acc ?? 0) + value;
+    }
+    remove(acc, value) {
+        PerKeySumReducer.runsRemove += 1;
+        log("reducer:perKeySum remove", PerKeySumReducer.runsRemove);
+        return acc - value;
+    }
+}
+PerKeySumReducer.runsAdd = 0;
+PerKeySumReducer.runsRemove = 0;
+// Mapper: collapse per-key sums under a single "total" key.
+class ToTotalMapper {
+    mapEntry(_key, values, _ctx) {
+        ToTotalMapper.runs += 1;
+        log("mapper:toTotal run", ToTotalMapper.runs);
+        const v = values.getUnique();
+        return [["total", v]];
+    }
+}
+ToTotalMapper.runs = 0;
 class NumbersResource {
     instantiate(collections) {
         return collections.numbers;
@@ -77,6 +105,11 @@ class NumbersResource {
 class DoubledResource {
     instantiate(collections) {
         return collections.numbers.map(DoubleMapper);
+    }
+}
+class PerKeySumResource {
+    instantiate(collections) {
+        return collections.perKeySums;
     }
 }
 class SumNaiveResource {
@@ -89,20 +122,38 @@ class SumIncResource {
         return collections.numbers.map(TotalMapperInc).reduce(SumReducerInc);
     }
 }
+class SumOfPerKeySumsResource {
+    instantiate(collections) {
+        return collections.perKeySums.map(ToTotalMapper).reduce(SumReducerInc);
+    }
+}
 export const service = {
     initialData: {
         numbers: [
             ["a", [1]],
             ["b", [2]],
+            ["c", [3]],
+            ["d", [4]],
+            ["e", [5]],
+            ["f", [6]],
+            ["g", [7]],
+            ["h", [8]],
+            ["i", [9]],
+            ["j", [10]],
         ],
     },
     resources: {
         numbers: NumbersResource,
         doubled: DoubledResource,
+        perKeySums: PerKeySumResource,
         sumNaive: SumNaiveResource,
         sumInc: SumIncResource,
+        sumOfPerKeySums: SumOfPerKeySumsResource,
     },
-    createGraph: (inputs) => inputs,
+    createGraph: (inputs) => {
+        const perKeySums = inputs.numbers.reduce(PerKeySumReducer);
+        return { ...inputs, perKeySums };
+    },
 };
 export const resetRunStats = () => {
     DoubleMapper.runs = 0;
@@ -112,6 +163,9 @@ export const resetRunStats = () => {
     TotalMapperInc.runs = 0;
     SumReducerInc.runsAdd = 0;
     SumReducerInc.runsRemove = 0;
+    PerKeySumReducer.runsAdd = 0;
+    PerKeySumReducer.runsRemove = 0;
+    ToTotalMapper.runs = 0;
 };
 export const getRunStats = () => ({
     doubledMapperRuns: DoubleMapper.runs,
@@ -121,4 +175,7 @@ export const getRunStats = () => ({
     totalIncMapperRuns: TotalMapperInc.runs,
     sumIncAddRuns: SumReducerInc.runsAdd,
     sumIncRemoveRuns: SumReducerInc.runsRemove,
+    perKeySumAddRuns: PerKeySumReducer.runsAdd,
+    perKeySumRemoveRuns: PerKeySumReducer.runsRemove,
+    toTotalMapperRuns: ToTotalMapper.runs,
 });

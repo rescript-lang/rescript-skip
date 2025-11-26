@@ -96,6 +96,17 @@ async function run() {
   await snapshot(broker, "doubled", "harness: doubled after update (inc)");
   await snapshot(broker, "sumInc", "harness: sum (inc) after update");
   console.log("harness: run counters (inc after update)", LiveHarnessServiceJs.getRunStats());
+  LiveHarnessServiceJs.resetRunStats();
+  await snapshot(broker, "perKeySums", "harness: per-key sums initial (two-stage)");
+  await snapshot(broker, "sumOfPerKeySums", "harness: total sum initial (two-stage)");
+  console.log("harness: run counters (two-stage initial)", LiveHarnessServiceJs.getRunStats());
+  await broker.update("numbers", [[
+      "d",
+      [10]
+    ]]);
+  await snapshot(broker, "perKeySums", "harness: per-key sums after update (two-stage)");
+  await snapshot(broker, "sumOfPerKeySums", "harness: total sum after update (two-stage)");
+  console.log("harness: run counters (two-stage after update)", LiveHarnessServiceJs.getRunStats());
   await SkipruntimeServer.Natural.close(server);
   console.log("harness: service closed");
 }

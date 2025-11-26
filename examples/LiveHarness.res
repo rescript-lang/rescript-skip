@@ -87,6 +87,34 @@ let run = async () => {
   await Client.snapshot(broker, "sumInc", "harness: sum (inc) after update")
   Console.log2("harness: run counters (inc after update)", Server.getRunStats())
 
+  // Two-stage incremental sum: per-key sums, then sum of per-key sums.
+  Server.resetRunStats()
+  await Client.snapshot(broker, "perKeySums", "harness: per-key sums initial (two-stage)")
+  await Client.snapshot(
+    broker,
+    "sumOfPerKeySums",
+    "harness: total sum initial (two-stage)",
+  )
+  Console.log2("harness: run counters (two-stage initial)", Server.getRunStats())
+
+  await Client.updateInput(
+    broker,
+    [
+      (JSON.String("d"), [JSON.Number(10.)]),
+    ],
+  )
+  await Client.snapshot(
+    broker,
+    "perKeySums",
+    "harness: per-key sums after update (two-stage)",
+  )
+  await Client.snapshot(
+    broker,
+    "sumOfPerKeySums",
+    "harness: total sum after update (two-stage)",
+  )
+  Console.log2("harness: run counters (two-stage after update)", Server.getRunStats())
+
   await Server.stop(server)
   Console.log("harness: service closed")
 }
