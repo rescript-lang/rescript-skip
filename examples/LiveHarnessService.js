@@ -1,30 +1,74 @@
+const ENABLE_LOGS = process.env["SKIP_HARNESS_LOGS"] === "1";
+const log = (...args) => {
+    if (ENABLE_LOGS)
+        console.log(...args);
+};
 // Mapper: multiply numeric values by 2, keep the same key.
 class DoubleMapper {
-    mapEntry(key, values) {
+    mapEntry(key, values, _ctx) {
+        DoubleMapper.runs += 1;
+        log("mapper:doubled run", DoubleMapper.runs, "key", key);
         const n = values.getUnique();
-        return [[key, typeof n === "number" ? n * 2 : n]];
+        return [[key, n * 2]];
     }
 }
-// Mapper: emit all values under a single "total" key for reduction.
-class TotalMapper {
-    mapEntry(_key, values) {
+DoubleMapper.runs = 0;
+// Mapper for naive sum: emit all values under a single "total" key.
+class TotalMapperNaive {
+    mapEntry(_key, values, _ctx) {
+        TotalMapperNaive.runs += 1;
+        log("mapper:totalNaive run", TotalMapperNaive.runs);
         return values.toArray().map((v) => ["total", v]);
     }
 }
-// Reducer: sum numbers with seed 0.
-class SumReducer {
+TotalMapperNaive.runs = 0;
+// Reducer for naive sum: forces recompute on removals.
+class SumReducerNaive {
     constructor() {
         this.initial = 0;
     }
     add(acc, value) {
-        const a = typeof acc === "number" ? acc : 0;
-        const n = typeof value === "number" ? value : 0;
-        return a + n;
+        SumReducerNaive.runsAdd += 1;
+        log("reducer:sumNaive add", SumReducerNaive.runsAdd);
+        return (acc ?? 0) + value;
     }
-    remove(acc, _value) {
-        return acc;
+    remove(_acc, _value) {
+        SumReducerNaive.runsRemove += 1;
+        log("reducer:sumNaive remove", SumReducerNaive.runsRemove);
+        // Signal full recompute from scratch.
+        return null;
     }
 }
+SumReducerNaive.runsAdd = 0;
+SumReducerNaive.runsRemove = 0;
+// Mapper for incremental sum: same shape as naive, separate counters.
+class TotalMapperInc {
+    mapEntry(_key, values, _ctx) {
+        TotalMapperInc.runs += 1;
+        log("mapper:totalInc run", TotalMapperInc.runs);
+        return values.toArray().map((v) => ["total", v]);
+    }
+}
+TotalMapperInc.runs = 0;
+// Reducer for incremental sum: updates accumulator via add/remove.
+class SumReducerInc {
+    constructor() {
+        this.initial = 0;
+    }
+    add(acc, value) {
+        SumReducerInc.runsAdd += 1;
+        log("reducer:sumInc add", SumReducerInc.runsAdd);
+        return (acc ?? 0) + value;
+    }
+    remove(acc, value) {
+        SumReducerInc.runsRemove += 1;
+        log("reducer:sumInc remove", SumReducerInc.runsRemove);
+        // Purely incremental: adjust by delta.
+        return acc - value;
+    }
+}
+SumReducerInc.runsAdd = 0;
+SumReducerInc.runsRemove = 0;
 class NumbersResource {
     instantiate(collections) {
         return collections.numbers;
@@ -35,9 +79,14 @@ class DoubledResource {
         return collections.numbers.map(DoubleMapper);
     }
 }
-class SumResource {
+class SumNaiveResource {
     instantiate(collections) {
-        return collections.numbers.map(TotalMapper).reduce(SumReducer);
+        return collections.numbers.map(TotalMapperNaive).reduce(SumReducerNaive);
+    }
+}
+class SumIncResource {
+    instantiate(collections) {
+        return collections.numbers.map(TotalMapperInc).reduce(SumReducerInc);
     }
 }
 export const service = {
@@ -50,7 +99,26 @@ export const service = {
     resources: {
         numbers: NumbersResource,
         doubled: DoubledResource,
-        sum: SumResource,
+        sumNaive: SumNaiveResource,
+        sumInc: SumIncResource,
     },
     createGraph: (inputs) => inputs,
 };
+export const resetRunStats = () => {
+    DoubleMapper.runs = 0;
+    TotalMapperNaive.runs = 0;
+    SumReducerNaive.runsAdd = 0;
+    SumReducerNaive.runsRemove = 0;
+    TotalMapperInc.runs = 0;
+    SumReducerInc.runsAdd = 0;
+    SumReducerInc.runsRemove = 0;
+};
+export const getRunStats = () => ({
+    doubledMapperRuns: DoubleMapper.runs,
+    totalNaiveMapperRuns: TotalMapperNaive.runs,
+    sumNaiveAddRuns: SumReducerNaive.runsAdd,
+    sumNaiveRemoveRuns: SumReducerNaive.runsRemove,
+    totalIncMapperRuns: TotalMapperInc.runs,
+    sumIncAddRuns: SumReducerInc.runsAdd,
+    sumIncRemoveRuns: SumReducerInc.runsRemove,
+});

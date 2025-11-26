@@ -4,6 +4,10 @@
 module Server = {
   @module("./LiveHarnessService.js")
   external service: SkipruntimeCore.skipService = "service"
+  @module("./LiveHarnessService.js")
+  external resetRunStats: unit => unit = "resetRunStats"
+  @module("./LiveHarnessService.js")
+  external getRunStats: unit => JSON.t = "getRunStats"
 
   let defaultOpts: SkipruntimeServer.runOptions = {
     streaming_port: 18081,
@@ -49,20 +53,39 @@ let run = async () => {
 
   let broker = Client.makeBroker(Server.defaultOpts)
 
+  Server.resetRunStats()
   await Client.snapshot(broker, "numbers", "harness: initial numbers")
   await Client.snapshot(broker, "doubled", "harness: initial doubled")
-  await Client.snapshot(broker, "sum", "harness: initial sum")
+  await Client.snapshot(broker, "sumNaive", "harness: initial sum (naive)")
+  Console.log2("harness: run counters (naive initial)", Server.getRunStats())
 
   await Client.updateInput(
     broker,
     [
-      (JSON.String("a"), [JSON.Number(10.)]),
       (JSON.String("c"), [JSON.Number(5.)]),
     ],
   )
   await Client.snapshot(broker, "numbers", "harness: numbers after update")
   await Client.snapshot(broker, "doubled", "harness: doubled after update")
-  await Client.snapshot(broker, "sum", "harness: sum after update")
+  await Client.snapshot(broker, "sumNaive", "harness: sum (naive) after update")
+  Console.log2("harness: run counters (naive after update)", Server.getRunStats())
+
+  Server.resetRunStats()
+  await Client.snapshot(broker, "numbers", "harness: initial numbers (inc)")
+  await Client.snapshot(broker, "doubled", "harness: initial doubled (inc)")
+  await Client.snapshot(broker, "sumInc", "harness: initial sum (inc)")
+  Console.log2("harness: run counters (inc initial)", Server.getRunStats())
+
+  await Client.updateInput(
+    broker,
+    [
+      (JSON.String("d"), [JSON.Number(7.)]),
+    ],
+  )
+  await Client.snapshot(broker, "numbers", "harness: numbers after update (inc)")
+  await Client.snapshot(broker, "doubled", "harness: doubled after update (inc)")
+  await Client.snapshot(broker, "sumInc", "harness: sum (inc) after update")
+  Console.log2("harness: run counters (inc after update)", Server.getRunStats())
 
   await Server.stop(server)
   Console.log("harness: service closed")

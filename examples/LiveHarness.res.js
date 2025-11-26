@@ -6,6 +6,14 @@ import * as LiveHarnessServiceJs from "./LiveHarnessService.js";
 
 let service = LiveHarnessServiceJs.service;
 
+function resetRunStats(prim) {
+  LiveHarnessServiceJs.resetRunStats();
+}
+
+function getRunStats(prim) {
+  return LiveHarnessServiceJs.getRunStats();
+}
+
 let defaultOpts = {
   streaming_port: 18081,
   control_port: 18080,
@@ -23,6 +31,8 @@ function stop(server) {
 
 let Server = {
   service: service,
+  resetRunStats: resetRunStats,
+  getRunStats: getRunStats,
   defaultOpts: defaultOpts,
   start: start,
   stop: stop
@@ -60,22 +70,32 @@ async function run() {
   let server = await start(defaultOpts);
   console.log("harness: service started");
   let broker = makeBroker(defaultOpts);
+  LiveHarnessServiceJs.resetRunStats();
   await snapshot(broker, "numbers", "harness: initial numbers");
   await snapshot(broker, "doubled", "harness: initial doubled");
-  await snapshot(broker, "sum", "harness: initial sum");
-  await broker.update("numbers", [
-    [
-      "a",
-      [10]
-    ],
-    [
+  await snapshot(broker, "sumNaive", "harness: initial sum (naive)");
+  console.log("harness: run counters (naive initial)", LiveHarnessServiceJs.getRunStats());
+  await broker.update("numbers", [[
       "c",
       [5]
-    ]
-  ]);
+    ]]);
   await snapshot(broker, "numbers", "harness: numbers after update");
   await snapshot(broker, "doubled", "harness: doubled after update");
-  await snapshot(broker, "sum", "harness: sum after update");
+  await snapshot(broker, "sumNaive", "harness: sum (naive) after update");
+  console.log("harness: run counters (naive after update)", LiveHarnessServiceJs.getRunStats());
+  LiveHarnessServiceJs.resetRunStats();
+  await snapshot(broker, "numbers", "harness: initial numbers (inc)");
+  await snapshot(broker, "doubled", "harness: initial doubled (inc)");
+  await snapshot(broker, "sumInc", "harness: initial sum (inc)");
+  console.log("harness: run counters (inc initial)", LiveHarnessServiceJs.getRunStats());
+  await broker.update("numbers", [[
+      "d",
+      [7]
+    ]]);
+  await snapshot(broker, "numbers", "harness: numbers after update (inc)");
+  await snapshot(broker, "doubled", "harness: doubled after update (inc)");
+  await snapshot(broker, "sumInc", "harness: sum (inc) after update");
+  console.log("harness: run counters (inc after update)", LiveHarnessServiceJs.getRunStats());
   await SkipruntimeServer.Natural.close(server);
   console.log("harness: service closed");
 }
