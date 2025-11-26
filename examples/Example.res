@@ -18,7 +18,7 @@ let () = {
 
   let doubledMapper =
     Natural.Mapper.make((key, values, _ctx, _params) =>
-      Values.toArray(values)->Belt.Array.map(v =>
+      Values.toArray(values)->Array.map(v =>
         switch v {
         | JSON.Number(n) => (key, JSON.Number(n *. 2.))
         | _ => (key, v)
