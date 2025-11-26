@@ -87,7 +87,7 @@ Conceptually, its type is:
 
 - `reduce : collection<k, v> -> reducer<v, a> -> collection<k, a>`
 
-On the Skip side (see `bindings/SkipruntimeCore.res:80` and `bindings/SkipruntimeCore.res:332`), that’s exposed as:
+On the Skip side (see `bindings/SkipruntimeCore.res`), that's exposed as:
 
 - `EagerCollection.reduce : (~params=?, collection<'k, 'v>, reducer<'v, 'a>) -> collection<'k, 'a>`
 - where a reducer is built as `Reducer.make(~initial, ~add, ~remove=?)`
@@ -179,11 +179,19 @@ npm run build && node examples/LiveHarness.res.js
 ```
 
 ## What else is in the repo
-- **Bindings**: `bindings/Skipruntime*.res` plus `bindings/SkipruntimeCoreHelpers.mjs` (class constructors, enums, SSE helpers including `subscribeSSE` for streaming updates).
-- **`examples/Example.res`**: Tiny binding smoke (LoadStatus, error ctor, mapper/reducer wiring) without starting the runtime.
-- **`examples/NotifierExample.res`**: Demonstrates notifier callbacks receiving collection updates and watermarks without wiring a full service.
-- **`examples/LiveHarness.res` + `LiveHarnessService.*`**: Demonstrates `map` and `reduce` semantics with `numbers`, `doubled`, and `sum` resources. Includes a client-side O(1) accumulator that subscribes to SSE to receive updates—showing how to layer efficient aggregates on top of reactive data.
-- **`examples/LiveService.*`**: The minimal reactive service definition used by `LiveClient.res` (typed in TS, emitted as JS). Service files are TS for class-heavy definitions and type checks; compiled JS is used at runtime.
+
+### Bindings (`bindings/`)
+- **`SkipruntimeCore.res`**: Core types, collections (`EagerCollection`, `LazyCollection`), operators (`map`, `reduce`, `mapReduce`), `Mapper`/`Reducer`/`LazyCompute` factories, notifiers, service instances.
+- **`SkipruntimeHelpers.res`**: HTTP broker (`SkipServiceBroker`), built-in reducers (`Sum`, `Min`, `Max`, `Count`), external service helpers (`PolledExternalService`, `SkipExternalService`), leader-follower topology (`asLeader`, `asFollower`).
+- **`SkipruntimeServer.res`**: `runService` to start HTTP/SSE servers.
+- **`SkipruntimeCoreHelpers.mjs`**: JS helpers for class constructors, enums, and SSE utilities (`subscribeSSE` for streaming).
+
+### Examples (`examples/`)
+- **`LiveClient.res`**: Main demo—starts a service, reads/updates via HTTP, subscribes via SSE.
+- **`LiveHarness.res` + `LiveHarnessService.ts`**: Demonstrates `map` and `reduce` semantics. Includes `ClientSum`, a client-side O(1) accumulator that subscribes to SSE.
+- **`Example.res`**: Binding smoke test—`LoadStatus`, errors, mapper/reducer wiring—without starting the runtime.
+- **`NotifierExample.res`**: Demonstrates notifier callbacks receiving collection updates and watermarks.
+- **`LiveService.ts`**: Minimal service definition for `LiveClient` (echo resource mirroring input).
 
 ## The bottom line
 
