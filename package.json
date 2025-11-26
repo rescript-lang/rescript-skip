@@ -5,6 +5,7 @@
   "scripts": {
     "build": "rescript build",
     "clean": "rescript clean",
+    "postinstall": "node scripts/postinstall-fix-skipruntime-core.js",
     "test": "npm run build && npm run typecheck && node examples/LiveClient.res.js",
     "typecheck": "tsc --noEmit"
   },
