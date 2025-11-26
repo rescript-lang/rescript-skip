@@ -196,6 +196,9 @@ module Notifier = {
 
   @module("./SkipruntimeCoreHelpers.mjs")
   external make: notifierSpec<'k, 'v> => t<'k, 'v> = "makeNotifier"
+
+  @send external notify: (t<'k, 'v>, collectionUpdate<'k, 'v>) => unit = "notify"
+  @send external close: t<'k, 'v> => unit = "close"
 }
 
 module ChangeManager = {
@@ -220,6 +223,9 @@ module Context = {
     "useExternalResource"
 
   @send external jsonExtract: (t, JSON.t, string) => array<JSON.t> = "jsonExtract"
+
+  @module("./SkipruntimeCoreHelpers.mjs")
+  external readFirstSSE: string => promise<string> = "readFirstSSE"
 }
 
 module ServiceDefinition = {

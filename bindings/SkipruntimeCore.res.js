@@ -130,7 +130,13 @@ let ChangeManager = {
   make: make$4
 };
 
-let Context = {};
+function readFirstSSE(prim) {
+  return SkipruntimeCoreHelpersMjs.readFirstSSE(prim);
+}
+
+let Context = {
+  readFirstSSE: readFirstSSE
+};
 
 let ServiceDefinition = {};
 

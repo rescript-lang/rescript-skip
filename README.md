@@ -55,15 +55,15 @@ node examples/LiveClient.res.js
 
 **Expected output:**
 ```
-live client: starting wasm service on ports 18080/18081…
-live client: service started
+server: starting wasm service on ports 18080/18081…
+server: service started
 live client: initial getAll [ [ 'foo', [ 'bar' ] ] ]
 live client: after update getAll [ [ 'bar', [ 'qux' ] ], [ 'foo', [ 'baz' ] ] ]
 live client: subscribing to http://127.0.0.1:18081/v1/streams/...
 live client: SSE chunk event: init
 id: …
 data: [["bar",["qux"]],["foo",["baz"]],["sse",["ping"]]]
-live client: service closed
+server: service closed
 ```
 
 Notice: We never wrote code to update `echo`. It happened automatically when `input` changed.

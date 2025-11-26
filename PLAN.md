@@ -20,6 +20,7 @@ Status legend: `[ ]` = pending, `[~]` = in progress, `[x]` = done.
    - Verify: `rescript build && node <example>`; note commands for contributors.
 5) Documentation pass (pending)
    - [ ] Update plan/README with usage, wasm vs native notes, engine expectations; run format/lint. Mention repo/package name (`rescript-skip`) and that compiler artifacts are intentionally checked in. Call out `npm test` runs the live client on ports 18080/18081.
+   - Rule: add bindings to `bindings/`, keep examples free of ad-hoc externals.
 
 ## Inventory (Skip runtime 0.0.19)
 - Packages in use: `@skipruntime/core` (bindings target), plus `@skipruntime/helpers`, `@skipruntime/server`, `@skipruntime/wasm` for examples/runtime. (Native dep removed.)
