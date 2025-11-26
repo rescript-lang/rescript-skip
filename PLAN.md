@@ -17,13 +17,12 @@ Status legend: `[ ]` = pending, `[~]` = in progress, `[x]` = done.
    - Run: `npm run build && node examples/LiveClient.res.js` (requires port binding).
 4) Tests/examples (in progress)
    - [~] Add ReScript tests/examples covering mapper/reducer wiring, subscription callbacks, option conversions, enum mapping, and the live service flow (SSE included in LiveClient).
-   - [ ] Improve error-handling in examples: ensure server shutdown in `LiveClient.res` even on failure; add timeout/status check in `readFirstSSE` before awaiting the first chunk.
    - Verify: `rescript build && node <example>`; note commands for contributors.
 5) Documentation pass (pending)
-   - [ ] Update plan/README with usage, wasm vs native notes, engine expectations; run format/lint. Mention repo/package name (`rescript-skip`) and that compiler artifacts are intentionally checked in.
+   - [ ] Update plan/README with usage, wasm vs native notes, engine expectations; run format/lint. Mention repo/package name (`rescript-skip`) and that compiler artifacts are intentionally checked in. Call out `npm test` runs the live client on ports 18080/18081.
 
 ## Inventory (Skip runtime 0.0.19)
-- Packages in use: `@skipruntime/core` (bindings target), plus `@skipruntime/helpers`, `@skipruntime/server`, `@skipruntime/wasm`, `@skipruntime/native` for examples/runtime.
+- Packages in use: `@skipruntime/core` (bindings target), plus `@skipruntime/helpers`, `@skipruntime/server`, `@skipruntime/wasm` for examples/runtime. (Native dep removed.)
 - Core exports: `dist/src/index.js`, `internal.js`, `binding.js`, `json.js`, `std.js` (+ `*-internal.js` variants).
 - Public API (from `src/api.ts`): `Mapper`, `Reducer`, `LazyCompute`, `LazyCollection`, `EagerCollection`, `Context`, `Values`, `Entry` = `[K, V[]]`, `CollectionUpdate`, `Resource`, `ExternalService`, `NamedCollections`, `InitialData`, `SkipService`, `Watermark`, `Json/JsonObject/Nullable/DepSafe/Opaque`.
 - Errors (`src/errors.ts`): `SkipError`, `SkipUnknownCollectionError`, `SkipUnknownResourceError`, `SkipRESTError`, `SkipFetchError`, `SkipClassNameError`, `SkipNonUniqueValueError`, `SkipResourceInstanceInUseError`.
@@ -43,5 +42,5 @@ Status legend: `[ ]` = pending, `[~]` = in progress, `[x]` = done.
 - Repo/package renamed to `rescript-skip`; ReScript 12 config remains.
 - Bindings and helpers live under `bindings/`; examples under `examples/`. Compiler artifacts (`.res.js`) are intentionally checked in for clarity.
 - Extended bindings cover collections, context, service definition/instance factory + lifecycle, and a “Natural” wrapper layer; `rescript build` passes after type alignment to `CollectionUpdate`/`Watermark`/`DepSafe`.
-- Live example (`examples/LiveClient.res`) exercises mapper/reducer wiring, `getAll`/`update`, and SSE flow; `LiveExampleTest.res` sanity-checks starting the service on ephemeral ports.
-- Future: add explicit tests for notifier/subscription callbacks and improve example robustness (shutdown on errors, SSE timeout/status handling), then refresh README with current commands and naming.
+- Live example (`examples/LiveClient.res`) exercises mapper/reducer wiring, `getAll`/`update`, and SSE flow; `npm test` builds and runs this live client (ports 18080/18081). `Example.res` is a binding-only smoke check.
+- Future: add explicit tests for notifier/subscription callbacks and improve example robustness (shutdown on errors, SSE timeout/status handling), then refresh README/plan with current commands and naming.
