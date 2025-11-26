@@ -19,7 +19,8 @@ Status legend: `[ ]` = pending, `[~]` = in progress, `[x]` = done.
    - [~] Add ReScript tests/examples covering mapper/reducer wiring, subscription callbacks, option conversions, enum mapping, and the live service flow (SSE included in LiveClient).
    - Verify: `rescript build && node <example>`; note commands for contributors.
 5) Documentation pass (pending)
-   - [ ] Update plan/README with usage, wasm vs native notes, engine expectations; run format/lint. Mention repo/package name (`rescript-skip`) and that compiler artifacts are intentionally checked in. Call out `npm test` runs the live client on ports 18080/18081.
+   - [~] Update plan/README with usage, wasm vs native notes, engine expectations; run format/lint. Mention repo/package name (`rescript-skip`) and that compiler artifacts are intentionally checked in. Call out `npm test` runs the live client on ports 18080/18081`.
+   - Node engine: works on current Node via wasm (native is Linux-only); runtime recommends >=22.6 <23 for native builds, but wasm path works on newer Node in practice.
    - Rule: add bindings to `bindings/`, keep examples free of ad-hoc externals.
 
 ## Inventory (Skip runtime 0.0.19)

@@ -72,9 +72,12 @@ The Skip runtime handles all the plumbing—dependency tracking, incremental rec
 
 ## Requirements
 
-- A recent Node (tested with current Node via wasm).
+- Works on current Node via wasm (no native runtime here; native is Linux-only). Runtime recommends Node >=22.6 <23 for native builds, but the wasm path has worked on newer Node in practice.
 - Two available ports (defaults: 18080 for HTTP, 18081 for SSE).
 - `npm install` to grab Skip packages.
+
+## Tests
+- `npm test` builds and runs the live client (`examples/LiveClient.res.js`) on ports 18080/18081.
 
 ## What else is in the repo
 - **Bindings**: `bindings/Skipruntime*.res` plus `bindings/SkipruntimeCoreHelpers.mjs` (class constructors, enums, SSE helper).
