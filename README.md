@@ -38,14 +38,7 @@ We build a tiny service with:
 
 **No manual invalidation code. No cache busting. No diffing logic.** The runtime tracks dependencies and pushes updates automatically.
 
-## What's in the code
-
-### Core files
-- **`examples/LiveService.mjs`** - Defines the service (one input collection, one reactive resource)
-- **`examples/LiveClient.res`** - Demonstrates the full cycle: start service → read → update → read → SSE chunk
-- **`bindings/SkipruntimeCore.res`, `bindings/SkipruntimeServer.res`, `bindings/SkipruntimeHelpers.res`** - ReScript bindings to drive the Skip runtime
-
-### Running it
+## Running the live demo (LiveClient)
 
 ```bash
 npm install
@@ -82,6 +75,12 @@ The Skip runtime handles all the plumbing—dependency tracking, incremental rec
 - A recent Node (tested with current Node via wasm).
 - Two available ports (defaults: 18080 for HTTP, 18081 for SSE).
 - `npm install` to grab Skip packages.
+
+## What else is in the repo
+- **Bindings**: `bindings/Skipruntime*.res` plus `bindings/SkipruntimeCoreHelpers.mjs` (class constructors, enums, SSE helper).
+- **`examples/Example.res`**: Tiny binding smoke (LoadStatus, error ctor, mapper/reducer wiring) without starting the runtime.
+- **`examples/NotifierExample.res`**: Demonstrates notifier callbacks receiving collection updates and watermarks without wiring a full service.
+- **`examples/LiveService.mjs`**: The minimal reactive service definition used by `LiveClient.res`.
 
 ## The bottom line
 
