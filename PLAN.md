@@ -16,7 +16,11 @@ Status legend: `[ ]` = pending, `[~]` = in progress, `[x]` = done.
    - [x] Tiny `SkipService` (`LiveService.mjs`) + runnable client (`LiveClient.res`) starting via wasm, exercising `getAll`/`update` via `SkipServiceBroker`, plus SSE subscription logging.
    - Run: `npm run build && node examples/LiveClient.res.js` (requires port binding).
 4) Tests/examples (in progress)
-   - [~] Add ReScript tests/examples covering mapper/reducer wiring, subscription callbacks, option conversions, enum mapping, and the live service flow (SSE included in LiveClient).
+   - [~] Add ReScript tests/examples covering:
+     - Mapper/reducer wiring with params and depSafe handling.
+     - Option/nullable flows (e.g., context helpers, mapper/reducer params).
+     - Enum mapping (LoadStatus round-trip).
+     - Subscription callbacks via runtime (`ServiceInstance.subscribe` with notifier).
    - Verify: `rescript build && node <example>`; note commands for contributors.
 5) Documentation pass (pending)
    - [~] Update plan/README with usage, wasm vs native notes, engine expectations; run format/lint. Mention repo/package name (`rescript-skip`) and that compiler artifacts are intentionally checked in. Call out `npm test` runs the live client on ports 18080/18081`.
