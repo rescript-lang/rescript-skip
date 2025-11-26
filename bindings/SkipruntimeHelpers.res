@@ -20,3 +20,26 @@ type broker
 
 @send external getStreamUUID: (broker, string, JSON.t) => promise<string> =
   "getStreamUUID"
+
+// Built-in reducers: native implementations for common aggregations.
+// Use with EagerCollection.reduce(collection, reducer).
+
+module Sum = {
+  type t
+  @module("@skipruntime/helpers") @new external make: unit => t = "Sum"
+}
+
+module Min = {
+  type t
+  @module("@skipruntime/helpers") @new external make: unit => t = "Min"
+}
+
+module Max = {
+  type t
+  @module("@skipruntime/helpers") @new external make: unit => t = "Max"
+}
+
+module Count = {
+  type t
+  @module("@skipruntime/helpers") @new external make: unit => t = "Count"
+}
