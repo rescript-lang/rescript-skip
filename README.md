@@ -79,11 +79,18 @@ The Skip runtime handles all the plumbing—dependency tracking, incremental rec
 ## Tests
 - `npm test` builds and runs the live client (`examples/LiveClient.res.js`) on ports 18080/18081.
 
+## LiveHarness (advanced demo)
+
+After LiveClient, try `examples/LiveHarness.res` + `LiveHarnessService.*` to see derived resources stay in sync:
+- Service shape: `numbers` input; `doubled` (mapper) and `sum` (mapper → reducer) derived resources.
+- Flow: start the service, snapshot all resources, update `numbers`, snapshot again. No SSE here—just reactive recompute via HTTP.
+- Run: `npm run build && node examples/LiveHarness.res.js` (uses ports 18080/18081).
+
 ## What else is in the repo
 - **Bindings**: `bindings/Skipruntime*.res` plus `bindings/SkipruntimeCoreHelpers.mjs` (class constructors, enums, SSE helper).
 - **`examples/Example.res`**: Tiny binding smoke (LoadStatus, error ctor, mapper/reducer wiring) without starting the runtime.
 - **`examples/NotifierExample.res`**: Demonstrates notifier callbacks receiving collection updates and watermarks without wiring a full service.
-- **`examples/LiveHarness.res` + `LiveHarnessService.*`**: Mapper/reducer-driven service showing reactive snapshots (numbers → doubled → sum) without the SSE flow.
+- **`examples/LiveHarness.res` + `LiveHarnessService.*`**: Mapper/reducer-driven service showing reactive snapshots (numbers → doubled → sum) without the SSE flow. This is the “next step” after LiveClient if you want to see derived resources recompute on updates.
 - **`examples/LiveService.*`**: The minimal reactive service definition used by `LiveClient.res` (typed in TS, emitted as JS). Service files are TS for class-heavy definitions and type checks; compiled JS is used at runtime.
 
 ## The bottom line
