@@ -46,6 +46,49 @@ module Client = {
     SkipruntimeHelpers.update(broker, "numbers", entries)
 }
 
+// Client-side O(1) incremental sum.
+// Demonstrates how to layer efficient aggregates on top of reactive data.
+module ClientSum = {
+  type state = {
+    mutable total: float,
+    mutable numbers: Dict.t<float>,
+  }
+
+  let state: state = {
+    total: 0.,
+    numbers: Dict.make(),
+  }
+
+  let init = () => {
+    // Must stay in sync with LiveHarnessService.initialData.numbers
+    let initialNumbers = [
+      ("a", 1.),
+      ("b", 2.),
+      ("c", 3.),
+      ("d", 4.),
+      ("e", 5.),
+      ("f", 6.),
+      ("g", 7.),
+      ("h", 8.),
+      ("i", 9.),
+      ("j", 10.),
+    ]
+
+    let numbers = Dict.fromArray(initialNumbers)
+    let total = initialNumbers->Array.reduce(0., (acc, (_k, v)) => acc +. v)
+
+    state.total = total
+    state.numbers = numbers
+  }
+
+  // O(1) update: subtract old value, add new value.
+  let applyUpdate = (key: string, newValue: float) => {
+    let oldValue = state.numbers->Dict.get(key)->Option.getOr(0.)
+    state.total = state.total -. oldValue +. newValue
+    state.numbers->Dict.set(key, newValue)
+  }
+}
+
 let run = async () => {
   Console.log("harness: starting LiveService (wasm) on 18080/18081…")
   let server = await Server.start(Server.defaultOpts)
@@ -53,67 +96,25 @@ let run = async () => {
 
   let broker = Client.makeBroker(Server.defaultOpts)
 
+  // Initialize client-side sum.
+  ClientSum.init()
+  Console.log2("harness: client sum (initial)", ClientSum.state.total)
+
+  // Phase 1: Initial snapshot.
   Server.resetRunStats()
-  await Client.snapshot(broker, "numbers", "harness: initial numbers")
-  await Client.snapshot(broker, "doubled", "harness: initial doubled")
-  await Client.snapshot(broker, "sumNaive", "harness: initial sum (naive)")
-  Console.log2("harness: run counters (naive initial)", Server.getRunStats())
+  await Client.snapshot(broker, "numbers", "harness: numbers")
+  await Client.snapshot(broker, "doubled", "harness: doubled")
+  await Client.snapshot(broker, "sum", "harness: sum")
+  Console.log2("harness: counters after initial snapshot", Server.getRunStats())
 
-  await Client.updateInput(
-    broker,
-    [
-      (JSON.String("c"), [JSON.Number(5.)]),
-    ],
-  )
-  await Client.snapshot(broker, "numbers", "harness: numbers after update")
-  await Client.snapshot(broker, "doubled", "harness: doubled after update")
-  await Client.snapshot(broker, "sumNaive", "harness: sum (naive) after update")
-  Console.log2("harness: run counters (naive after update)", Server.getRunStats())
-
-  Server.resetRunStats()
-  await Client.snapshot(broker, "numbers", "harness: initial numbers (inc)")
-  await Client.snapshot(broker, "doubled", "harness: initial doubled (inc)")
-  await Client.snapshot(broker, "sumInc", "harness: initial sum (inc)")
-  Console.log2("harness: run counters (inc initial)", Server.getRunStats())
-
-  await Client.updateInput(
-    broker,
-    [
-      (JSON.String("d"), [JSON.Number(7.)]),
-    ],
-  )
-  await Client.snapshot(broker, "numbers", "harness: numbers after update (inc)")
-  await Client.snapshot(broker, "doubled", "harness: doubled after update (inc)")
-  await Client.snapshot(broker, "sumInc", "harness: sum (inc) after update")
-  Console.log2("harness: run counters (inc after update)", Server.getRunStats())
-
-  // Two-stage incremental sum: per-key sums, then sum of per-key sums.
-  Server.resetRunStats()
-  await Client.snapshot(broker, "perKeySums", "harness: per-key sums initial (two-stage)")
-  await Client.snapshot(
-    broker,
-    "sumOfPerKeySums",
-    "harness: total sum initial (two-stage)",
-  )
-  Console.log2("harness: run counters (two-stage initial)", Server.getRunStats())
-
-  await Client.updateInput(
-    broker,
-    [
-      (JSON.String("d"), [JSON.Number(10.)]),
-    ],
-  )
-  await Client.snapshot(
-    broker,
-    "perKeySums",
-    "harness: per-key sums after update (two-stage)",
-  )
-  await Client.snapshot(
-    broker,
-    "sumOfPerKeySums",
-    "harness: total sum after update (two-stage)",
-  )
-  Console.log2("harness: run counters (two-stage after update)", Server.getRunStats())
+  // Phase 2: Update c from 3 to 5.
+  await Client.updateInput(broker, [(JSON.String("c"), [JSON.Number(5.)])])
+  await Client.snapshot(broker, "numbers", "harness: numbers after c→5")
+  await Client.snapshot(broker, "doubled", "harness: doubled after c→5")
+  await Client.snapshot(broker, "sum", "harness: sum after c→5")
+  ClientSum.applyUpdate("c", 5.)
+  Console.log2("harness: client sum after c→5", ClientSum.state.total)
+  Console.log2("harness: counters after c→5", Server.getRunStats())
 
   await Server.stop(server)
   Console.log("harness: service closed")
