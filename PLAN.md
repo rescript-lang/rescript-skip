@@ -10,15 +10,13 @@ Goal: Idiomatic ReScript bindings for Skip runtime APIs.
 4. **JS helpers** — Class constructors, SSE streaming in `bindings/SkipruntimeCoreHelpers.mjs`
 5. **Examples** — `LiveClient.res` (minimal), `LiveHarness.res` (reducer semantics + SSE subscription)
 
-## Not yet bound (external service helpers)
+## External service helpers (now bound)
 
-From `@skipruntime/helpers`, these are not bound but available for advanced use cases:
+From `@skipruntime/helpers`, for distributed/federated architectures:
 
-- **PolledExternalService** — For polling external data sources into reactive collections
-- **SkipExternalService** — For connecting to remote Skip services
-- **asLeader / asFollower** — For service replication patterns
-
-These are for distributed/federated architectures; add bindings if needed.
+- **PolledExternalService** — Poll external HTTP endpoints into reactive collections
+- **SkipExternalService** — Connect to remote Skip services via SSE
+- **asLeader / asFollower** — Leader-follower replication patterns
 
 ## Quick start
 

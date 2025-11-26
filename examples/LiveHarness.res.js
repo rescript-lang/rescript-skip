@@ -61,7 +61,7 @@ function updateInput(broker, entries) {
 }
 
 async function getStreamUrl(opts, broker, resource) {
-  let uuid = await broker.getStreamUUID(resource, null);
+  let uuid = await broker.getStreamUUID(resource, undefined);
   return `http://` + localhost + `:` + opts.streaming_port.toString() + `/v1/streams/` + uuid;
 }
 

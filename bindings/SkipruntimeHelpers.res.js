@@ -9,10 +9,16 @@ let Max = {};
 
 let Count = {};
 
+let PolledExternalService = {};
+
+let SkipExternalService = {};
+
 export {
   Sum,
   Min,
   Max,
   Count,
+  PolledExternalService,
+  SkipExternalService,
 }
 /* No side effect */

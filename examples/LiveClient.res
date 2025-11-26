@@ -14,12 +14,12 @@ module Client = {
   // Broker for talking to the running service over HTTP/SSE.
   let makeBroker = (opts: SkipruntimeServer.runOptions) =>
     SkipruntimeHelpers.make(
-      {
+      Some({
         host: localhost,
         streaming_port: opts.streaming_port,
         control_port: opts.control_port,
         secured: None,
-      },
+      }),
       None,
     )
 
@@ -33,7 +33,7 @@ module Client = {
 
   // Subscribe once and read the first SSE chunk to prove live updates.
   let readOneSse = async (opts: SkipruntimeServer.runOptions, broker) => {
-    let uuid = await SkipruntimeHelpers.getStreamUUID(broker, "echo", JSON.Null)
+    let uuid = await SkipruntimeHelpers.getStreamUUID(broker, "echo", None)
     let streamUrl =
       `http://${localhost}:${opts.streaming_port->Int.toString}/v1/streams/${uuid}`
     Console.log2("live client: subscribing to", streamUrl)

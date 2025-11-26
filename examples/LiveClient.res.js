@@ -42,7 +42,7 @@ function updateInput(broker, entries) {
 }
 
 async function readOneSse(opts, broker) {
-  let uuid = await broker.getStreamUUID("echo", null);
+  let uuid = await broker.getStreamUUID("echo", undefined);
   let streamUrl = `http://` + localhost + `:` + opts.streaming_port.toString() + `/v1/streams/` + uuid;
   console.log("live client: subscribing to", streamUrl);
   let ssePromise = SkipruntimeCore.Context.readFirstSSE(streamUrl);

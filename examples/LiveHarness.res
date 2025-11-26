@@ -28,12 +28,12 @@ module Client = {
 
   let makeBroker = (opts: SkipruntimeServer.runOptions) =>
     SkipruntimeHelpers.make(
-      {
+      Some({
         host: localhost,
         streaming_port: opts.streaming_port,
         control_port: opts.control_port,
         secured: None,
-      },
+      }),
       None,
     )
 
@@ -46,7 +46,7 @@ module Client = {
     SkipruntimeHelpers.update(broker, "numbers", entries)
 
   let getStreamUrl = async (opts: SkipruntimeServer.runOptions, broker, resource) => {
-    let uuid = await SkipruntimeHelpers.getStreamUUID(broker, resource, JSON.Null)
+    let uuid = await SkipruntimeHelpers.getStreamUUID(broker, resource, None)
     `http://${localhost}:${opts.streaming_port->Int.toString}/v1/streams/${uuid}`
   }
 }
