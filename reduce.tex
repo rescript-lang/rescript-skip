@@ -187,7 +187,7 @@ A reducer $R = (\iota, \oplus, \ominus)$ is \emph{well-formed} if $\ominus$ is t
 \]
 \end{definition}
 
-In database terminology, a well-formed reducer defines an \emph{invertible distributive aggregate} (see Section~\ref{subsec:distributive-aggregates}): the fold can be computed over partitions independently (distributive), and individual values can be removed from the accumulated result (invertible).
+In database terminology, a well-formed reducer defines an \emph{invertible distributive aggregate} (see Section~\ref{subsec:aggregate-classes}): the fold can be computed over partitions independently (distributive), and individual values can be removed from the accumulated result (invertible).
 
 \begin{remark}[Remove-Add Commutativity]
 For well-formed reducers where $\oplus$ and $\ominus$ arise from an abelian group action on $A$, the following property holds automatically:
@@ -198,7 +198,7 @@ This ensures that the order of interleaved adds and removes does not affect the 
 All practical reducers (sum, count, product over commutative groups) satisfy this.
 \end{remark}
 
-\subsection{Distributive Aggregates}\label{subsec:distributive-aggregates}
+\subsection{Aggregate Classes}\label{subsec:aggregate-classes}
 
 The database literature~\cite{viewmaintenance} classifies aggregates as \emph{distributive}, \emph{algebraic}, or \emph{holistic}.
 In our setting, a pair $(\iota, \oplus)$ defines a \emph{distributive aggregate} when folding over a union of multisets can be decomposed into folds over the parts.
@@ -218,6 +218,16 @@ The database literature also defines \emph{algebraic} aggregates~\cite{viewmaint
 For example, average is algebraic because it can be computed from the distributive aggregates sum and count via division.
 In Skip, this corresponds to using a well-formed reducer with richer accumulator state (e.g., $(sum, count)$ pairs) followed by a pointwise mapper to extract the final value.
 We illustrate this pattern in Section~\ref{sec:examples}.
+
+Finally, \emph{holistic} aggregates~\cite{viewmaintenance} cannot be computed from bounded intermediate state---they potentially require access to the entire multiset.
+Examples include:
+\begin{itemize}
+  \item \textbf{MEDIAN}: requires knowing the full distribution to find the middle value(s)
+  \item \textbf{QUANTILES/PERCENTILES}: similar to median, require global ordering information
+  \item \textbf{RANK}: depends on the position of a value within the full sorted dataset
+\end{itemize}
+For holistic aggregates, any exact incremental solution must maintain auxiliary state that grows with the data (e.g., the entire multiset or an order-statistic tree) in order to answer updates and queries.
+Skip can of course support such analyses by using richer data structures or approximations (e.g., quantile sketches), but these fall outside the constant-space, purely algebraic reducer model we formalize in this paper.
 
 \subsection{Deltas}
 
@@ -474,6 +484,55 @@ In Skip's implementation, min is handled as a \emph{partial reducer}:
   \item The runtime responds by recomputing from scratch: $\mathsf{fold}_{\min}(\iota, C'(k))$
   \item Alternatively, one can maintain richer state (e.g., a sorted multiset of all values), making the remove operation invertible on that richer state---but this is no longer a constant-space reducer
 \end{itemize}
+
+\subsection{Dead Code Elimination via Reachability}
+
+We sketch a more complex example based on dead code elimination.
+Assume source code is partitioned into files; each file is a key in a collection and contributes a partial directed graph of symbol references.
+
+\paragraph{Inputs.}
+For each file key $f$ we maintain:
+\begin{itemize}
+  \item $\mathsf{edges}(f) \in \mathcal{M}(V \times V)$: multiset of directed edges $(u,v)$ from symbol $u$ to symbol $v$.
+  \item $\mathsf{nodes}(f) \in \mathcal{M}(V)$: multiset of declared symbols.
+  \item $\mathsf{roots}(f) \in \mathcal{M}(V)$: multiset of root symbols (entry points).
+\end{itemize}
+
+\paragraph{Normalize to a global graph.}
+A mapper rewrites each $(f, x)$ to a single global key $g$, preserving $x$.
+Reduce with the \emph{union} reducer (add = multiset insert, remove = multiset delete) to obtain:
+\[
+\mathsf{edges}_g = \biguplus_f \mathsf{edges}(f),\quad
+\mathsf{nodes}_g = \biguplus_f \mathsf{nodes}(f),\quad
+\mathsf{roots}_g = \biguplus_f \mathsf{roots}(f).
+\]
+This reducer is well-formed (multiset union with deletion), so updates from individual files flow as small deltas to the global graph state.
+
+\paragraph{Reachability view (incremental with deletions).}
+Define a derived view $\mathsf{reachable}_g \subseteq \mathsf{nodes}_g$ as the set of nodes reachable from $\mathsf{roots}_g$ along $\mathsf{edges}_g$.
+Implement this as a \emph{lazy compute} over the global key $g$: a user-defined computation that, given the current collections $\mathsf{edges}_g$, $\mathsf{roots}_g$ (and optionally $\mathsf{nodes}_g$), produces the current reachable set and maintains internal state to update it incrementally as upstream deltas arrive.
+In Skip, \texttt{LazyCompute.make} takes a function of the form $(\mathsf{lazyCollection}, k, context, params) \mapsto \text{array of values}$; here $k$ would be the global key $g$, and the function would implement the dynamic reachability algorithm described below.
+The lazy compute participates in the reactive pipeline like \texttt{reduce}: when upstream inputs change, it receives deltas and produces the updated reachable set for key $g$.
+Internally, it maintains a dynamic reachability data structure:
+\begin{itemize}
+  \item Maintain a spanning forest of reachable nodes and, for each node, a count of incoming edges from currently reachable predecessors.
+  \item When an edge $(u,v)$ is added and $u$ is reachable, increment the incoming count for $v$; if $v$ becomes newly reachable, enqueue its outgoing edges for propagation.
+  \item When an edge $(u,v)$ is removed, decrement the incoming count for $v$; if the count drops to zero and $v \notin \mathsf{roots}_g$, mark $v$ unreachable and propagate the removal to its outgoing edges.
+  \item When a root is added, treat it as initially reachable and propagate; when a root is removed, drop its reachability and propagate as above.
+\end{itemize}
+Fully dynamic reachability algorithms support these updates in time proportional to the size of the affected subgraph: for a change set $\Delta E$ of edges and $\Delta R$ of roots, the cost is $O(|\Delta E| + |\Delta R| + |A|)$ where $A$ is the set of nodes whose reachability status changes (newly reached nodes plus nodes that lose their last reachable predecessor).
+This avoids full recomputation: edits to a single file only touch the portion of the graph reachable from the edited nodes and their dependents.
+
+\paragraph{Unreachable (dead) nodes.}
+Define the dead-code view as a set difference:
+\[
+\mathsf{dead}_g = \mathsf{nodes}_g \setminus \mathsf{reachable}_g.
+\]
+Because $\mathsf{nodes}_g$ and $\mathsf{reachable}_g$ are themselves maintained reactively, $\mathsf{dead}_g$ updates automatically when any file changes.
+
+\paragraph{Savings.}
+Changes in a single file produce small deltas to $\mathsf{edges}_g$, $\mathsf{nodes}_g$, and $\mathsf{roots}_g$, rather than rebuilding the whole graph.
+If reachability is maintained incrementally for additions, the update work scales with the affected portion of the graph; even with recompute-on-delete semantics, recomputation is localized to the global graph key $g$.
 
 \section{Complexity}
 
