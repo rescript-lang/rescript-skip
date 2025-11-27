@@ -60,6 +60,10 @@ function updateInput(broker, entries) {
   return broker.update("numbers", entries);
 }
 
+function updateEdges(broker, entries) {
+  return broker.update("edges", entries);
+}
+
 async function getStreamUrl(opts, broker, resource) {
   let uuid = await broker.getStreamUUID(resource, undefined);
   return `http://` + localhost + `:` + opts.streaming_port.toString() + `/v1/streams/` + uuid;
@@ -70,6 +74,7 @@ let Client = {
   makeBroker: makeBroker,
   snapshot: snapshot,
   updateInput: updateInput,
+  updateEdges: updateEdges,
   getStreamUrl: getStreamUrl
 };
 
@@ -158,6 +163,7 @@ async function run() {
   await snapshot(broker, "numbers", "harness: numbers");
   await snapshot(broker, "doubled", "harness: doubled");
   await snapshot(broker, "sum", "harness: sum");
+  await snapshot(broker, "dead", "harness: dead code (unreachable nodes)");
   console.log("harness: counters after initial snapshot", LiveHarnessServiceJs.getRunStats());
   await broker.update("numbers", [[
       "c",
@@ -166,8 +172,17 @@ async function run() {
   await snapshot(broker, "numbers", "harness: numbers after c→5");
   await snapshot(broker, "doubled", "harness: doubled after c→5");
   await snapshot(broker, "sum", "harness: sum after c→5");
+  await snapshot(broker, "dead", "harness: dead code after c→5 (unchanged)");
   console.log("harness: client sum after c→5 (from SSE)", state.total);
   console.log("harness: counters after c→5", LiveHarnessServiceJs.getRunStats());
+  await broker.update("edges", [[
+      "fileA",
+      [[
+          "main",
+          "util"
+        ]]
+    ]]);
+  await snapshot(broker, "dead", "harness: dead code after dropping util→lib");
   close();
   await SkipruntimeServer.Natural.close(server);
   console.log("harness: service closed");

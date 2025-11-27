@@ -45,6 +45,9 @@ module Client = {
   let updateInput = (broker, entries) =>
     SkipruntimeHelpers.update(broker, "numbers", entries)
 
+  let updateEdges = (broker, entries) =>
+    SkipruntimeHelpers.update(broker, "edges", entries)
+
   let getStreamUrl = async (opts: SkipruntimeServer.runOptions, broker, resource) => {
     let uuid = await SkipruntimeHelpers.getStreamUUID(broker, resource, None)
     `http://${localhost}:${opts.streaming_port->Int.toString}/v1/streams/${uuid}`
@@ -138,6 +141,7 @@ let run = async () => {
   await Client.snapshot(broker, "numbers", "harness: numbers")
   await Client.snapshot(broker, "doubled", "harness: doubled")
   await Client.snapshot(broker, "sum", "harness: sum")
+  await Client.snapshot(broker, "dead", "harness: dead code (unreachable nodes)")
   Console.log2("harness: counters after initial snapshot", Server.getRunStats())
 
   // Phase 2: Update c from 3 to 5.
@@ -145,8 +149,21 @@ let run = async () => {
   await Client.snapshot(broker, "numbers", "harness: numbers after c→5")
   await Client.snapshot(broker, "doubled", "harness: doubled after c→5")
   await Client.snapshot(broker, "sum", "harness: sum after c→5")
+  await Client.snapshot(broker, "dead", "harness: dead code after c→5 (unchanged)")
   Console.log2("harness: client sum after c→5 (from SSE)", ClientSum.getTotal())
   Console.log2("harness: counters after c→5", Server.getRunStats())
+
+  // Phase 3: Remove an edge to create dead code.
+  await Client.updateEdges(broker, [
+    (
+      JSON.String("fileA"),
+      [
+        // drop util -> lib edge to make lib/helper unreachable
+        JSON.Array([JSON.String("main"), JSON.String("util")]),
+      ],
+    ),
+  ])
+  await Client.snapshot(broker, "dead", "harness: dead code after dropping util→lib")
 
   ClientSum.close()
   await Server.stop(server)
