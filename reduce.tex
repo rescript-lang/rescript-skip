@@ -187,7 +187,7 @@ A reducer $R = (\iota, \oplus, \ominus)$ is \emph{well-formed} if $\ominus$ is t
 \]
 \end{definition}
 
-In database terminology, a well-formed reducer defines an \emph{invertible distributive aggregate}: the fold can be computed over partitions independently (distributive), and individual values can be removed from the accumulated result (invertible).
+In database terminology, a well-formed reducer defines an \emph{invertible distributive aggregate} (see Section~\ref{subsec:distributive-aggregates}): the fold can be computed over partitions independently (distributive), and individual values can be removed from the accumulated result (invertible).
 
 \begin{remark}[Remove-Add Commutativity]
 For well-formed reducers where $\oplus$ and $\ominus$ arise from an abelian group action on $A$, the following property holds automatically:
@@ -197,6 +197,22 @@ For well-formed reducers where $\oplus$ and $\ominus$ arise from an abelian grou
 This ensures that the order of interleaved adds and removes does not affect the final result.
 All practical reducers (sum, count, product over commutative groups) satisfy this.
 \end{remark}
+
+\subsection{Distributive Aggregates}\label{subsec:distributive-aggregates}
+
+The database literature~\cite{viewmaintenance} classifies aggregates as \emph{distributive}, \emph{algebraic}, or \emph{holistic}.
+In our setting, a pair $(\iota, \oplus)$ defines a \emph{distributive aggregate} when folding over a union of multisets can be decomposed into folds over the parts.
+
+\begin{definition}[Distributive Aggregate]
+Let $\oplus : A \times V \to A$ be pairwise commutative and $\iota \in A$.
+We say that $(\iota, \oplus)$ is a \emph{distributive aggregate} if for all finite multisets $M, N \in \mathcal{M}(V)$:
+\[
+\mathsf{fold}_\oplus(\iota, M \uplus N) = \mathsf{fold}_\oplus\big(\mathsf{fold}_\oplus(\iota, M), N\big).
+\]
+\end{definition}
+
+By Lemma~1, any pair $(\iota, \oplus)$ with pairwise commutative $\oplus$ is a distributive aggregate in this sense.
+Moreover, a well-formed reducer $R = (\iota, \oplus, \ominus)$ (Definition~\ref{def:well-formed-reducer}) is precisely an \emph{invertible distributive aggregate}: the aggregate is distributive over partitions of the multiset, and individual contributions can be removed using $\ominus$.
 
 \subsection{Deltas}
 
