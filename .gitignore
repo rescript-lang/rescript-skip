@@ -7,3 +7,5 @@ lib/
 *.cmj
 *.cmi
 *.rei
+reduce.aux
+reduce.log
