@@ -214,6 +214,11 @@ We say that $(\iota, \oplus)$ is a \emph{distributive aggregate} if for all fini
 By Lemma~1, any pair $(\iota, \oplus)$ with pairwise commutative $\oplus$ is a distributive aggregate in this sense.
 Moreover, a well-formed reducer $R = (\iota, \oplus, \ominus)$ (Definition~\ref{def:well-formed-reducer}) is precisely an \emph{invertible distributive aggregate}: the aggregate is distributive over partitions of the multiset, and individual contributions can be removed using $\ominus$.
 
+The database literature also defines \emph{algebraic} aggregates~\cite{viewmaintenance}: aggregates that can be computed by maintaining a fixed number of distributive aggregates and post-processing their results.
+For example, average is algebraic because it can be computed from the distributive aggregates sum and count via division.
+In Skip, this corresponds to using a well-formed reducer with richer accumulator state (e.g., $(sum, count)$ pairs) followed by a pointwise mapper to extract the final value.
+We illustrate this pattern in Section~\ref{sec:examples}.
+
 \subsection{Deltas}
 
 We model updates to collections as deltas.
@@ -386,6 +391,14 @@ This establishes the inverse property for all $a$ of the form $\mathsf{fold}_\op
 In many practical reducers (for example sum over integers or product over rationals), every accumulator value is reachable as $\mathsf{fold}_\oplus(\iota, M)$ for some multiset $M$, so the definition of well-formedness above coincides with the simpler global inverse law $(a \oplus v) \ominus v = a$ for all $a \in A$, $v \in V$.
 \end{remark}
 
+\begin{remark}[Partial Reducers in Skip]
+Theorem~\ref{thm:equivalence} characterizes when incremental updates are correct for well-formed reducers.
+In Skip's concrete API, the remove operation is allowed to be \emph{partial}: a reducer's remove function can signal ``recompute from scratch'' (by returning \texttt{None} in the ReScript bindings) instead of producing an updated accumulator.
+Such partial reducers handle cases where $\ominus$ cannot efficiently invert $\oplus$---for example, computing the minimum without maintaining auxiliary state.
+The runtime responds by recomputing the fold from scratch for that key.
+Examples of partial reducers appear in Section~\ref{sec:examples}.
+\end{remark}
+
 \section{Examples}\label{sec:examples}
 
 \subsection{Sum Reducer}
@@ -421,21 +434,45 @@ If $y$ is removed ($\Delta^- = \{y\}$) and $w$ is added ($\Delta^+ = \{w\}$), th
 a'_k = (3 - 1) + 1 = 3
 \]
 
+\subsection{Average Reducer (Algebraic)}
+
+The average is a classic example of an \emph{algebraic} aggregate~\cite{viewmaintenance}: it can be expressed as a post-processing of a distributive aggregate over richer state.
+A standard encoding uses accumulator state $A = \mathbb{R} \times \mathbb{N}$ to track sum and count.
+
+Define:
+\[
+R_{\mathsf{avgState}} = \big((0,0),\ \lambda((s,c),v).\, (s+v, c+1),\ \lambda((s,c),v).\, (s-v, c-1)\big)
+\]
+with accumulator state $A = \mathbb{R} \times \mathbb{N}$ tracking (sum, count).
+On reachable states with $c > 0$, the corresponding average is $\mathsf{avg} = s / c$.
+This reducer is well-formed: addition and subtraction on sum and increment/decrement on count satisfy the inverse law on all reachable accumulator states, so Theorem~\ref{thm:equivalence} applies.
+In Skip, the average view can be implemented by first using $\mathsf{reduce}_{R_{\mathsf{avgState}}}$ and then applying a pointwise mapper that divides sum by count for each key.
+
+Note that maintaining \emph{only} the average (without count) is insufficient: to update the average when adding a value, one needs to know how many values contributed to the current average.
+Thus, average is genuinely an algebraic aggregate requiring auxiliary state, unlike sum or count which can be maintained with a single accumulator value.
+
 \subsection{Min Reducer (Partial)}
 
+The min reducer demonstrates why invertibility is essential for incremental updates.
+With accumulator $A = \mathbb{R} \cup \{+\infty\}$, the add operation is:
 \[
-R_{\mathsf{min}} = (+\infty, \lambda(a,v).\, \min(a,v), \bot)
+\iota = +\infty, \quad \oplus = \lambda(a,v).\, \min(a,v)
 \]
 
-The min reducer does not have a well-defined remove operation $\ominus$ in general, so $R_{\mathsf{min}}$ is not a reducer in the strict sense of Definition~\ref{def:well-formed-reducer}.
+However, there is no inverse operation $\ominus$ that works in general.
 Consider $C(k) = \{3, 5\}$ with $a_k = 3$.
-If we remove $5$, we need $a'_k = 3$, which is correct.
-But if we remove $3$, we need $a'_k = 5$---yet from $a_k = 3$ alone, we cannot recover that $5$ was the second-smallest value.
-
-The Skip runtime handles such \emph{partial reducers} by either:
 \begin{itemize}
-  \item Recomputing from scratch when values are removed, or
-  \item Maintaining additional state (e.g., a sorted structure of all values).
+  \item If we remove $5$: we need $a'_k = 3$. We could define $(3 \ominus 5) = 3$ (removing a non-minimum has no effect).
+  \item If we remove $3$: we need $a'_k = 5$. But from $a_k = 3$ alone, we cannot know that $5$ was the second-smallest value!
+\end{itemize}
+
+This shows min is \emph{not} an invertible distributive aggregate: knowing only the accumulated minimum is insufficient to update the result when the minimum itself is removed.
+
+In Skip's implementation, min is handled as a \emph{partial reducer}:
+\begin{itemize}
+  \item The remove function signals ``cannot update incrementally'' (e.g., returns \texttt{None})
+  \item The runtime responds by recomputing from scratch: $\mathsf{fold}_{\min}(\iota, C'(k))$
+  \item Alternatively, one can maintain richer state (e.g., a sorted multiset of all values), making the remove operation invertible on that richer state---but this is no longer a constant-space reducer
 \end{itemize}
 
 \section{Complexity}
