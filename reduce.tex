@@ -68,7 +68,7 @@ We also position Skip's design relative to other streaming and reactive systems 
 \section{Preliminaries}\label{sec:preliminaries}
 
 Let $K$ be a set of keys, $V$ a set of values, and $A$ a set of accumulator values.
-For a set $V$, we write $\mathcal{M}(V)$ for the set of finite multisets over $V$; we use $\uplus$ and $\setminus$ for multiset union and multiset difference, respectively.
+For a set $V$, we write $\mathcal{M}(V)$ for the set of finite multisets over $V$; we use $\uplus$ and $\setminus$ for multiset union and multiset difference, respectively, and write $M \subseteq N$ for multisets when every element has multiplicity in $M$ less than or equal to its multiplicity in $N$.
 
 \begin{definition}[Collection]
 A \emph{collection} is a function $C : K \to \mathcal{M}(V)$. We write $C(k)$ for the multiset of values associated with key $k$.
@@ -127,6 +127,19 @@ which is well-defined by the Characterisation of Multiset Fold.
 If an initial element $\iota \in A$ is fixed, we abbreviate $\mathsf{fold}_\star(M) := \mathsf{fold}_\star(\iota, M)$.
 \end{definition}
 
+\begin{lemma}[Fold over Union of Multisets]
+Let $\star : A \times V \to A$ be pairwise commutative and let $M, N \in \mathcal{M}(V)$ be finite multisets.
+Then for all $a \in A$:
+\[
+\mathsf{fold}_\star(a, M \uplus N) = \mathsf{fold}_\star(\mathsf{fold}_\star(a, M), N).
+\]
+\end{lemma}
+
+\begin{proof}
+Choose an enumeration of $M \uplus N$ in which all elements of $M$ appear first, followed by all elements of $N$.
+The result then follows immediately from the definition of $\mathsf{fold}^{\mathsf{seq}}_\star$ and the fact that $\mathsf{fold}_\star$ is independent of the particular enumeration.
+\end{proof}
+
 \section{The Reduce Combinator}\label{sec:reduce}
 
 The \texttt{reduce} combinator produces a \emph{view} of a collection by summarizing the values for each key.
@@ -168,9 +181,9 @@ We call $\oplus$ the \emph{add} operation and $\ominus$ the \emph{remove} operat
 For a reducer $R = (\iota, \oplus, \ominus)$, we write $\mathsf{reduce}_R$ for $\mathsf{reduce}_{\iota,\oplus}$.
 
 \begin{definition}[Well-Formed Reducer]\label{def:well-formed-reducer}
-A reducer $R = (\iota, \oplus, \ominus)$ is \emph{well-formed} if $\ominus$ is the \textbf{inverse} of $\oplus$:
+A reducer $R = (\iota, \oplus, \ominus)$ is \emph{well-formed} if $\ominus$ is the \textbf{inverse} of $\oplus$ on reachable accumulator values, that is, for all finite multisets $M \in \mathcal{M}(V)$ and all $v \in V$:
 \[
-\forall a \in A, v \in V.\; (a \oplus v) \ominus v = a
+( \mathsf{fold}_\oplus(\iota, M) \oplus v) \ominus v = \mathsf{fold}_\oplus(\iota, M)
 \]
 \end{definition}
 
@@ -272,7 +285,7 @@ The following theorem shows that the inverse property is both necessary and suff
 Let $R = (\iota, \oplus, \ominus)$ be a reducer (with pairwise commutative $\oplus$ and $\ominus$).
 The following are equivalent:
 \begin{enumerate}
-  \item $R$ is well-formed (i.e., $(a \oplus v) \ominus v = a$ for all $a \in A$, $v \in V$).
+  \item $R$ is well-formed in the sense of Definition~\ref{def:well-formed-reducer}.
   \item $R$ satisfies the incremental correctness property.
 \end{enumerate}
 \end{theorem}
@@ -350,14 +363,11 @@ The right side is:
 
 Therefore $(a \oplus v) \ominus v = a$.
 
-This establishes the inverse property for all $a$ in the image of $\mathsf{fold}_\oplus(\iota, -)$.
-Since every accumulator value that arises during execution of $\mathsf{reduce}$ is of this form, this suffices for correctness.
+This establishes the inverse property for all $a$ of the form $\mathsf{fold}_\oplus(\iota, M)$, i.e.\ for all reachable accumulator values, which is exactly the condition in Definition~\ref{def:well-formed-reducer}.
 \end{proof}
 
 \begin{remark}
-The proof of (2 $\Rightarrow$ 1) establishes the inverse property for \emph{reachable} accumulator values---those expressible as $\mathsf{fold}_\oplus(\iota, M)$ for some finite multiset $M$.
-If the accumulator type $A$ contains unreachable values, the inverse property need not hold for them.
-In practice, for reducers like sum over integers or product over rationals, all values are reachable, so the distinction is immaterial.
+In many practical reducers (for example sum over integers or product over rationals), every accumulator value is reachable as $\mathsf{fold}_\oplus(\iota, M)$ for some multiset $M$, so the definition of well-formedness above coincides with the simpler global inverse law $(a \oplus v) \ominus v = a$ for all $a \in A$, $v \in V$.
 \end{remark}
 
 \section{Examples}\label{sec:examples}
@@ -401,7 +411,7 @@ a'_k = (3 - 1) + 1 = 3
 R_{\mathsf{min}} = (+\infty, \lambda(a,v).\, \min(a,v), \bot)
 \]
 
-The min reducer does not have a well-defined remove operation $\ominus$ in general.
+The min reducer does not have a well-defined remove operation $\ominus$ in general, so $R_{\mathsf{min}}$ is not a reducer in the strict sense of Definition~\ref{def:well-formed-reducer}.
 Consider $C(k) = \{3, 5\}$ with $a_k = 3$.
 If we remove $5$, we need $a'_k = 3$, which is correct.
 But if we remove $3$, we need $a'_k = 5$---yet from $a_k = 3$ alone, we cannot recover that $5$ was the second-smallest value.
@@ -415,7 +425,8 @@ The Skip runtime handles such \emph{partial reducers} by either:
 \section{Complexity}
 
 \begin{theorem}[Time Complexity]
-For a well-formed reducer with $O(1)$ add and remove operations:
+For a reducer $R = (\iota, \oplus, \ominus)$ where $\oplus$ and $\ominus$ are $O(1)$ operations, the time to compute $\mathsf{update}_R(a_k, \Delta, k)$ is $O(|\Delta^-(k)| + |\Delta^+(k)|)$.
+In particular, if each logical update induces a delta with $O(1)$ values per key, then:
 \begin{itemize}
   \item Adding a value: $O(1)$ to update the accumulator
   \item Removing a value: $O(1)$ to update the accumulator
