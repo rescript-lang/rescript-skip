@@ -11,6 +11,7 @@
 \newtheorem{theorem}{Theorem}
 \newtheorem{lemma}{Lemma}
 \newtheorem{remark}{Remark}
+\newtheorem{example}{Example}
 
 \title{A Formal Semantics for Skip's Reactive \texttt{reduce} Combinator}
 \author{Cristiano Calcagno}
@@ -83,6 +84,19 @@ For a set $V$, we write $\mathcal{M}(V)$ for the set of finite multisets over $V
 A \emph{collection} is a function $C : K \to \mathcal{M}(V)$. We write $C(k)$ for the multiset of values associated with key $k$.
 \end{definition}
 
+\begin{example}[Purchases per user]
+As a running example, let $K = \{\mathit{user1}, \mathit{user2}\}$ and $V = \mathbb{Z}$.
+We model purchases per user and care about which purchase amounts occurred, not about the order in which they happened.
+A collection $C : K \to \mathcal{M}(V)$ might be given by
+\[
+C(\mathit{user1}) = \{30,30,50\}
+\quad\text{and}\quad
+C(\mathit{user2}) = \{70\}.
+\]
+Here $C(\mathit{user1})$ is a multiset where $30$ has multiplicity $2$ and $50$ has multiplicity $1$, meaning that \emph{user1} made two purchases of \$30 and one purchase of \$50 (in some order).
+This illustrates that multiple purchases can have the same amount, and that multisets record these multiplicities while abstracting away from order.
+\end{example}
+
 \subsection{Commutative Operations}
 
 \begin{definition}[Pairwise Commutative Operation]\label{def:pairwise-commutative}
@@ -136,6 +150,15 @@ which is well-defined by the Characterisation of Multiset Fold.
 If an initial element $\iota \in A$ is fixed, we abbreviate $\mathsf{fold}_\star(M) := \mathsf{fold}_\star(\iota, M)$.
 \end{definition}
 
+\begin{example}[Total spent over a multiset]
+Continuing the purchase example, let $A = V = \mathbb{Z}$ and define $\star(a,v) = a + v$ with initial element $\iota = 0$.
+For the multiset $M = \{30,30,50\}$ of purchases for \emph{user1} we have
+\[
+\mathsf{fold}_\star(0, M) = 0 + 30 + 30 + 50 = 110,
+\]
+regardless of the order in which the elements of $M$ are enumerated.
+\end{example}
+
 \begin{lemma}[Fold over Union of Multisets]
 Let $\star : A \times V \to A$ be pairwise commutative and let $M, N \in \mathcal{M}(V)$ be finite multisets.
 Then for all $a \in A$:
@@ -148,6 +171,17 @@ Then for all $a \in A$:
 Choose an enumeration of $M \uplus N$ in which all elements of $M$ appear first, followed by all elements of $N$.
 The result then follows immediately from the definition of $\mathsf{fold}^{\mathsf{seq}}_\star$ and the fact that $\mathsf{fold}_\star$ is independent of the particular enumeration.
 \end{proof}
+
+\begin{example}[Decomposing total spend]
+With $\star(a,v) = a+v$ and $\iota = 0$, suppose we split \emph{user1}'s purchases as $M = \{30\}$ and $N = \{30,50\}$ so that $M \uplus N = \{30,30,50\}$.
+Then
+\[
+\mathsf{fold}_\star(0, M \uplus N)
+  = 0 + 30 + 30 + 50
+  = \mathsf{fold}_\star(\mathsf{fold}_\star(0, M), N),
+\]
+showing that we can compute the total spent either directly on $M \uplus N$ or by first aggregating over $M$ and then incrementally folding in the purchases in $N$.
+\end{example}
 
 \section{The Reduce Combinator}\label{sec:reduce}
 
@@ -165,6 +199,20 @@ defined as:
 \]
 That is, for each key $k$, we fold the operation $\oplus$ over all values in $C(k)$, starting from $\iota$.
 \end{definition}
+
+\begin{example}[Per-user analytics as reduce]
+For the purchase collection $C$ above, two common choices of $\oplus$ are:
+\begin{itemize}
+  \item the \emph{sum} operation $\oplus_{\mathsf{sum}}(a,v) = a + v$ with $\iota_{\mathsf{sum}} = 0$, giving each user their total spend;
+  \item the \emph{count} operation $\oplus_{\mathsf{count}}(a,v) = a + 1$ with $\iota_{\mathsf{count}} = 0$, giving each user their number of purchases.
+\end{itemize}
+Then, for example,
+\[
+\mathsf{reduce}_{\iota_{\mathsf{sum}},\oplus_{\mathsf{sum}}}(C)(\mathit{user1}) = 110,
+\qquad
+\mathsf{reduce}_{\iota_{\mathsf{count}},\oplus_{\mathsf{count}}}(C)(\mathit{user1}) = 3.
+\]
+\end{example}
 
 The view $\mathsf{reduce}_{\iota,\oplus}(C)$ is a derived collection that depends on $C$.
 When $C$ changes, the view must be updated to remain consistent.
@@ -195,6 +243,14 @@ A reducer $R = (\iota, \oplus, \ominus)$ is \emph{well-formed} if $\ominus$ is t
 ( \mathsf{fold}_\oplus(\iota, M) \oplus v) \ominus v = \mathsf{fold}_\oplus(\iota, M)
 \]
 \end{definition}
+
+\begin{example}[Interpreting well-formedness for sum]
+For $R_{\mathsf{sum}}$ and any multiset $M$ of purchase amounts and value $v \in \mathbb{Z}$, well-formedness says that if we start from the total spend $\mathsf{fold}_\oplus(0, M)$, then adding a purchase of amount $v$ and immediately removing it leaves the total unchanged:
+\[
+\big(\mathsf{fold}_\oplus(0, M) + v\big) - v = \mathsf{fold}_\oplus(0, M).
+\]
+This is exactly the intuitive requirement that $\ominus$ undo the effect of $\oplus$ on reachable accumulator states.
+\end{example}
 
 In database terminology, a well-formed reducer defines an \emph{invertible distributive aggregate} (see Section~\ref{subsec:aggregate-classes}): the fold can be computed over partitions independently (distributive), and individual values can be removed from the accumulated result (invertible).
 
@@ -259,6 +315,19 @@ C \bullet \Delta = \lambda k.\, (C(k) \setminus \Delta^-(k)) \uplus \Delta^+(k)
 Intuitively, $C \bullet \Delta$ is the collection obtained by first removing all values in $\Delta^-$ from $C$ and then adding all values in $\Delta^+$.
 \end{definition}
 
+\begin{example}[Changing a user's purchases]
+For key $k = \mathit{user1}$ in the purchase collection $C$, suppose we remove one \$30 purchase and add a new \$20 purchase.
+This yields a delta with
+\[
+\Delta^-(k) = \{30\},\qquad \Delta^+(k) = \{20\}
+\]
+and updated multiset
+\[
+C'(k) = (C(k) \setminus \{30\}) \uplus \{20\} = \{30,50,20\},
+\]
+which again records all purchases for \emph{user1} but with one order-irrelevant change in their amounts.
+\end{example}
+
 \begin{remark}[Operational Construction of Deltas]
 In the Skip runtime, for each key $k$ we compute an \emph{old} multiset $\mathit{old}(k)$ of contributing values and a \emph{new} multiset $\mathit{new}(k)$. The delta is then constructed as:
 \[
@@ -286,6 +355,21 @@ That is, we first apply all removals $\Delta^-(k)$ to $a_k$ using $\ominus$, and
 This is well-defined since $\oplus$ and $\ominus$ are pairwise commutative.
 Here $\mathsf{fold}_\ominus$ is the multiset fold induced by $\ominus$, defined exactly as in Section~\ref{sec:preliminaries}; pairwise commutativity of $\ominus$ guarantees it is well-defined.
 \end{definition}
+
+\begin{example}[Updating a user's total spend]
+Let $R_{\mathsf{sum}}$ be the sum reducer and consider again $k = \mathit{user1}$ with
+\[
+C(k) = \{30,30,50\}, \qquad a_k = \mathsf{reduce}_{R_{\mathsf{sum}}}(C)(k) = 110.
+\]
+Applying the delta above (removing \$30, adding \$20) gives
+\[
+\mathsf{update}_{R_{\mathsf{sum}}}(a_k, \Delta, k)
+  = \mathsf{fold}_\oplus(\mathsf{fold}_\ominus(110, \{30\}), \{20\})
+  = (110 - 30) + 20
+  = 100,
+\]
+which matches the total obtained by recomputing from scratch on the updated multiset $C'(k) = \{30,50,20\}$.
+\end{example}
 
 \begin{lemma}[Cancelling a Multiset of Removals]\label{lem:fold-ominus-cancels}
 Let $R = (\iota, \oplus, \ominus)$ be a well-formed reducer.
@@ -333,6 +417,10 @@ A reducer $R$ satisfies the \emph{incremental correctness property} if for all c
 \mathsf{reduce}_R(C \bullet \Delta)(k) = \mathsf{update}_R(\mathsf{reduce}_R(C)(k), \Delta, k)
 \]
 \end{definition}
+
+\begin{example}[Sum as a sanity check]
+For the sum reducer $R_{\mathsf{sum}}$, the incremental correctness property simply formalizes the familiar claim that ``subtracting the amounts of removed purchases and adding the amounts of new purchases yields the same total spend as recomputing the sum from scratch'' for every user and every delta.
+\end{example}
 
 The following theorem shows that the inverse property is both necessary and sufficient for incremental correctness.
 
