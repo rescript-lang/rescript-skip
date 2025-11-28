@@ -56,10 +56,10 @@ Our main result (Theorem~\ref{thm:equivalence}) proves that incremental correctn
 This provides Skip users with a precise specification: satisfy the well-formedness condition, and your custom reducer is guaranteed to work correctly with Skip's incremental update mechanism.
 
 \paragraph{Synthesis of ideas.}
-Our formalization builds on Skip's design and synthesizes ideas from multiple domains:
+Our formalization builds on Skip's design and synthesizes ideas from multiple domains, which anchor the rest of the paper:
 \begin{itemize}
-  \item From \textbf{incremental databases and streaming systems}, we take the insight that invertibility is key to efficient updates---aggregations with inverse operations can be maintained in $O(1)$ time per change.
-  \item From \textbf{Skip's reactive runtime}, we take the user-facing combinator design: a first-class, composable operator that developers use directly, rather than callbacks tied to internal machinery.
+  \item From \textbf{incremental databases and streaming systems} (distributive, algebraic, holistic aggregates~\cite{viewmaintenance}), we carry over the aggregate-class taxonomy and view maintenance perspective, and the insight that invertibility yields $O(1)$ per-change maintenance for suitable aggregates.
+  \item From \textbf{Skip's reactive runtime}, we take the user-facing combinator contract: reducers are first-class, composable values whose invertibility the runtime can exploit, and which otherwise fall back safely to recompute.
   \item From \textbf{formal methods}, we provide a complete characterization: not merely sufficient conditions for correctness, but a precise \emph{if-and-only-if} theorem that fully characterizes when Skip's incremental updates are correct.
 \end{itemize}
 
@@ -69,6 +69,7 @@ This paper formalizes Skip's \texttt{reduce} combinator. We provide:
   \item A denotational semantics for \texttt{reduce} as a derived view (Section~\ref{sec:reduce})
   \item A formal model of deltas and Skip's incremental update procedure (Section~\ref{sec:incremental})
   \item A precise well-formedness condition and proof that it is both necessary and sufficient for correctness (Section~\ref{sec:correctness})
+  \item A complexity contract: well-formed reducers admit $O(1)$ per-key updates, while partial reducers fall back to recomputation (Sections~\ref{sec:incremental} and~\ref{sec:examples})
   \item Concrete examples including sum, count, and min reducers (Section~\ref{sec:examples})
 \end{itemize}
 We also position Skip's design relative to other streaming and reactive systems (Section~\ref{sec:related}) and analyze the complexity benefits of incremental updates.
@@ -230,7 +231,7 @@ We illustrate this pattern in Section~\ref{sec:examples}.
 Finally, \emph{holistic} aggregates~\cite{viewmaintenance} cannot be computed from bounded intermediate state---they potentially require access to the entire multiset.
 Examples include:
 \begin{itemize}
-  \item \textbf{MEDIAN}: requires knowing the full distribution to find the middle value(s)
+  \item \textbf{MEDIAN}: needs the full distribution to pick the middle value(s)
   \item \textbf{QUANTILES/PERCENTILES}: similar to median, require global ordering information
   \item \textbf{RANK}: depends on the position of a value within the full sorted dataset
 \end{itemize}
@@ -521,7 +522,7 @@ Callbacks in other systems are bound to particular contexts (keyed tables, windo
 \paragraph{Streaming systems with add/remove callbacks.}
 Several streaming systems allow users to supply both add and remove logic, but not as a first-class combinator:
 
-\emph{Apache Flink} (Table API) allows user-defined aggregate functions with \texttt{accumulate} and \texttt{retract} methods.
+\emph{Apache Flink} (Table API) has user-defined aggregates with \texttt{accumulate} and \texttt{retract} methods.
 These are lifecycle methods on a stateful object that Flink's query planner plugs into its retraction-message algebra---not a standalone combinator.
 
 \emph{Apache Kafka Streams} provides \texttt{Aggregator} (add) and \texttt{Subtractor} (remove) interfaces for KTable aggregations.
