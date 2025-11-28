@@ -275,7 +275,22 @@ Given the current accumulator value $a_k$ for key $k$ and a delta $\Delta$, the 
 \]
 That is, we first apply all removals $\Delta^-(k)$ to $a_k$ using $\ominus$, and then apply all additions $\Delta^+(k)$ using $\oplus$.
 This is well-defined since $\oplus$ and $\ominus$ are pairwise commutative.
+Here $\mathsf{fold}_\ominus$ is the multiset fold induced by $\ominus$, defined exactly as in Section~\ref{sec:preliminaries}; pairwise commutativity of $\ominus$ guarantees it is well-defined.
 \end{definition}
+
+\begin{lemma}[Cancelling a Multiset of Removals]\label{lem:fold-ominus-cancels}
+Let $R = (\iota, \oplus, \ominus)$ be a well-formed reducer.
+For any finite multiset $M$ and multiset $D \subseteq M$:
+\[
+\mathsf{fold}_\ominus\big(\mathsf{fold}_\oplus(\iota, M), D\big) = \mathsf{fold}_\oplus(\iota, M \setminus D)
+\]
+\end{lemma}
+
+\begin{proof}
+Enumerate $D$ as a sequence $[v_1,\dots,v_n]$.
+By well-formedness, $(a \oplus v_i) \ominus v_i = a$ for all reachable $a$.
+Pairwise commutativity of $\oplus$ and $\ominus$ lets us reorder additions and removals, so we can swap each $(\oplus v_i)$ next to its $(\ominus v_i)$ and cancel it, leaving precisely the fold over $M \setminus D$.
+\end{proof}
 
 \section{Correctness}\label{sec:correctness}
 
@@ -341,9 +356,9 @@ a = \mathsf{fold}_\oplus(\iota, M) = \mathsf{fold}_\oplus(\iota, M_0 \uplus \Del
 Let $a_0 = \mathsf{fold}_\oplus(\iota, M_0)$.
 Then $a = \mathsf{fold}_\oplus(a_0, \Delta^-(k))$.
 
-By the inverse property applied inductively (once for each element of $\Delta^-(k)$):
+By Lemma~\ref{lem:fold-ominus-cancels} with $M = M_0 \uplus \Delta^-(k)$ and $D = \Delta^-(k)$:
 \[
-\mathsf{fold}_\ominus(a, \Delta^-(k)) = \mathsf{fold}_\ominus(\mathsf{fold}_\oplus(a_0, \Delta^-(k)), \Delta^-(k)) = a_0
+\mathsf{fold}_\ominus(a, \Delta^-(k)) = \mathsf{fold}_\oplus(\iota, (M_0 \uplus \Delta^-(k)) \setminus \Delta^-(k)) = \mathsf{fold}_\oplus(\iota, M_0) = a_0
 \]
 
 Therefore:
@@ -454,7 +469,7 @@ Define:
 R_{\mathsf{avgState}} = \big((0,0),\ \lambda((s,c),v).\, (s+v, c+1),\ \lambda((s,c),v).\, (s-v, c-1)\big)
 \]
 with accumulator state $A = \mathbb{R} \times \mathbb{N}$ tracking (sum, count).
-On reachable states with $c > 0$, the corresponding average is $\mathsf{avg} = s / c$.
+On reachable states with $c > 0$, the corresponding average is $\mathsf{avg} = s / c$; when $c = 0$ (empty multiset), the view can be defined as a designated ``no value'' (e.g., \texttt{None}) or $0$ depending on the application.
 This reducer is well-formed: addition and subtraction on sum and increment/decrement on count satisfy the inverse law on all reachable accumulator states, so Theorem~\ref{thm:equivalence} applies.
 In Skip, the average view can be implemented by first using $\mathsf{reduce}_{R_{\mathsf{avgState}}}$ and then applying a pointwise mapper that divides sum by count for each key.
 
