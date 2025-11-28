@@ -14,7 +14,4 @@ name = "mathlib"
 scope = "leanprover-community"
 
 [[lean_lib]]
-name = "ReduceDemo"
-
-[[lean_lib]]
 name = "Reduce"
