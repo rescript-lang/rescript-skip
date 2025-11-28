@@ -1,7 +1,7 @@
-name = "reduce-demo"
+name = "lean-formalisation"
 version = "0.1.0"
 keywords = ["math"]
-defaultTargets = ["ReduceDemo"]
+defaultTargets = ["Reduce"]
 
 [leanOptions]
 pp.unicode.fun = true # pretty-prints `fun a ↦ b`
@@ -15,3 +15,6 @@ scope = "leanprover-community"
 
 [[lean_lib]]
 name = "ReduceDemo"
+
+[[lean_lib]]
+name = "Reduce"

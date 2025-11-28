@@ -1,4 +1,4 @@
-# reduce-demo
+# lean-formalisation
 
 ## GitHub configuration
 
