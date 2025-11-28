@@ -21,9 +21,9 @@
 
 \begin{abstract}
 We present a formal semantics for the \texttt{reduce} combinator in Skip~\cite{skip}, a reactive programming framework that maintains aggregated views of collections with automatic incremental updates.
-Skip exposes reducers as user-facing combinators: a reducer $R = (\iota, \oplus, \ominus)$ specifies an initial value, an add operation, and a remove operation, subject to an informal correctness condition.
-This paper formalizes that condition and proves that incremental correctness---where updates produce the same result as recomputation---holds \emph{if and only if} the reducer is well-formed (i.e., $\ominus$ is the inverse of $\oplus$).
-Our contribution combines the \textbf{algebraic foundations of incremental computation} (from differential dataflow and databases) with Skip's \textbf{user-facing combinator design} to provide a \textbf{formally characterized correctness contract}---giving Skip users a precise specification for writing correct custom reducers.
+Skip exposes reducers as \textbf{first-class combinators}: a reducer $R = (\iota, \oplus, \ominus)$ is a reusable, composable value---not a callback tied to a specific engine context---that developers can apply uniformly across arbitrary reactive pipelines.
+Unlike streaming systems (Flink, Kafka Streams) that provide add/remove callbacks bound to specific operators, and unlike FRP and incremental computation frameworks that hide inverses internally, Skip surfaces the algebraic structure as a user-facing programming construct.
+This paper formalizes Skip's correctness condition---providing a user-facing specification not found in prior systems---and proves that incremental correctness holds \emph{if and only if} the reducer is well-formed (i.e., $\ominus$ is the inverse of $\oplus$), giving Skip users a precise specification for writing correct custom reducers.
 \end{abstract}
 
 \section{Introduction}
@@ -41,6 +41,14 @@ A distinguishing feature of Skip is that reducers are exposed as \textbf{user-fa
 Rather than being internal implementation details hidden from users, Skip allows developers to define their own reducers for domain-specific aggregations.
 Skip's documentation specifies an informal correctness condition: the result of applying the runtime's sequence of remove/add calls must equal recomputing from scratch.
 This design enables extensibility (custom aggregations), composability (reducers combine with other Skip combinators), and---when the condition is satisfied---correctness guarantees.
+
+\paragraph{What distinguishes Skip's design.}
+Three aspects distinguish Skip's reducer from related systems:
+\begin{enumerate}
+  \item \textbf{First-class combinator, not callback.} Unlike Flink's \texttt{retract} methods or Kafka Streams' \texttt{Subtractor} interfaces---which are callbacks tied to specific engine contexts---Skip's reducer is a standalone, reusable value applicable to any reactive collection.
+  \item \textbf{User-facing inverse.} Unlike FRP libraries (which provide only append-style folds) and incremental computation frameworks (which handle inverses internally), Skip exposes $\ominus$ as an explicit user-defined operation.
+  \item \textbf{Formal correctness.} While systems like DBSP and differential dataflow rest on rigorous algebraic foundations internally, no prior system provides a formal specification that users can apply when defining their own reducers; this paper fills that gap.
+\end{enumerate}
 
 \paragraph{This paper.}
 We formalize Skip's reducer abstraction and its correctness condition.
@@ -528,6 +536,11 @@ Moreover, none of these systems provide formal correctness conditions---they doc
 \emph{Apache Beam} and \emph{Spark Streaming} do not expose user-defined inverse operations; they handle retractions internally via recomputation or diffing.
 \emph{Functional reactive programming} libraries (Fran, Yampa, Reactive Banana~\cite{frp}) provide append-only fold combinators (\texttt{foldp}, \texttt{accumE}) with no built-in remove.
 \emph{Incremental computation} frameworks (Adapton, Jane Street's Incremental) support removal internally via dependency tracking, but do not expose a user-facing inverse operation.
+
+\paragraph{Reactive JS and FRP streams.}
+UI-oriented reactive frameworks (React, Vue, Svelte, Solid) and stream/FRP libraries (RxJS, Elm, Yampa, Reactive Banana) expose push-based signals or events with combinators like map, filter, merge, combineLatest, and scan/foldp.
+They offer declarative wiring of time-varying values and typically avoid duplicate work via topological scheduling, but state updates are expressed as opaque folds; the runtime does not know or exploit user-defined inverses.
+As a result, invertibility and O(1) maintenance for removals are left to user code, whereas Skip surfaces add/remove as a first-class contract the runtime can optimize.
 
 \paragraph{Differential Dataflow and DBSP.}
 Differential dataflow~\cite{differentialdataflow} and DBSP~\cite{dbsp} provide rigorous foundations for incremental computation using Z-sets (multisets with integer multiplicities) and abelian groups.
