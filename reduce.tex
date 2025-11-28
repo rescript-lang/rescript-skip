@@ -485,68 +485,6 @@ In Skip's implementation, min is handled as a \emph{partial reducer}:
   \item Alternatively, one can maintain richer state (e.g., a sorted multiset of all values), making the remove operation invertible on that richer state---but this is no longer a constant-space reducer
 \end{itemize}
 
-\subsection{Dead Code Elimination via Reachability}
-
-We sketch a more complex example based on dead code elimination.
-Assume source code is partitioned into files; each file is a key in a collection and contributes a partial directed graph of symbol references.
-
-\paragraph{Inputs.}
-For each file key $f$ we maintain:
-\begin{itemize}
-  \item $\mathsf{edges}(f) \in \mathcal{M}(V \times V)$: multiset of directed edges $(u,v)$ from symbol $u$ to symbol $v$.
-  \item $\mathsf{nodes}(f) \in \mathcal{M}(V)$: multiset of declared symbols.
-  \item $\mathsf{roots}(f) \in \mathcal{M}(V)$: multiset of root symbols (entry points).
-\end{itemize}
-
-\paragraph{Normalize to a global graph.}
-A mapper rewrites each $(f, x)$ to a single global key $g$, preserving $x$.
-Reduce with the \emph{union} reducer (add = multiset insert, remove = multiset delete) to obtain:
-\[
-\mathsf{edges}_g = \biguplus_f \mathsf{edges}(f),\quad
-\mathsf{nodes}_g = \biguplus_f \mathsf{nodes}(f),\quad
-\mathsf{roots}_g = \biguplus_f \mathsf{roots}(f).
-\]
-This reducer is well-formed (multiset union with deletion), so updates from individual files flow as small deltas to the global graph state.
-
-\paragraph{Reachability view (incremental with deletions).}
-Define a derived view $\mathsf{reachable}_g \subseteq \mathsf{nodes}_g$ as the set of nodes reachable from $\mathsf{roots}_g$ along $\mathsf{edges}_g$.
-Implement this as a \emph{lazy compute} over the global key $g$: a user-defined computation that, given the current collections $\mathsf{edges}_g$, $\mathsf{roots}_g$ (and optionally $\mathsf{nodes}_g$), produces the current reachable set and maintains internal state to update it incrementally as upstream deltas arrive.
-In Skip, \texttt{LazyCompute.make} takes a function of the form $(\mathsf{lazyCollection}, k, context, params) \mapsto \text{array of values}$; here $k$ would be the global key $g$, and the function would implement the dynamic reachability algorithm described below.
-The lazy compute participates in the reactive pipeline like \texttt{reduce}: when upstream inputs change, it receives deltas and produces the updated reachable set for key $g$.
-Internally, it maintains a dynamic reachability data structure:
-\begin{itemize}
-  \item Maintain a spanning forest of reachable nodes and, for each node, a count of incoming edges from currently reachable predecessors.
-  \item When an edge $(u,v)$ is added and $u$ is reachable, increment the incoming count for $v$; if $v$ becomes newly reachable, enqueue its outgoing edges for propagation.
-  \item When an edge $(u,v)$ is removed, decrement the incoming count for $v$; if the count drops to zero and $v \notin \mathsf{roots}_g$, mark $v$ unreachable and propagate the removal to its outgoing edges.
-  \item When a root is added, treat it as initially reachable and propagate; when a root is removed, drop its reachability and propagate as above.
-\end{itemize}
-Fully dynamic reachability algorithms support these updates in time proportional to the size of the affected subgraph: for a change set $\Delta E$ of edges and $\Delta R$ of roots, the cost is $O(|\Delta E| + |\Delta R| + |A|)$ where $A$ is the set of nodes whose reachability status changes (newly reached nodes plus nodes that lose their last reachable predecessor).
-This avoids full recomputation: edits to a single file only touch the portion of the graph reachable from the edited nodes and their dependents.
-
-\paragraph{Unreachable (dead) nodes.}
-Define the dead-code view as a set difference:
-\[
-\mathsf{dead}_g = \mathsf{nodes}_g \setminus \mathsf{reachable}_g.
-\]
-Because $\mathsf{nodes}_g$ and $\mathsf{reachable}_g$ are themselves maintained reactively, $\mathsf{dead}_g$ updates automatically when any file changes.
-
-\paragraph{Savings.}
-Changes in a single file produce small deltas to $\mathsf{edges}_g$, $\mathsf{nodes}_g$, and $\mathsf{roots}_g$, rather than rebuilding the whole graph.
-If reachability is maintained incrementally for additions, the update work scales with the affected portion of the graph; even with recompute-on-delete semantics, recomputation is localized to the global graph key $g$.
-
-\section{Complexity}
-
-\begin{theorem}[Time Complexity]
-For a reducer $R = (\iota, \oplus, \ominus)$ where $\oplus$ and $\ominus$ are $O(1)$ operations, the time to compute $\mathsf{update}_R(a_k, \Delta, k)$ is $O(|\Delta^-(k)| + |\Delta^+(k)|)$.
-In particular, if each logical update induces a delta with $O(1)$ values per key, then:
-\begin{itemize}
-  \item Adding a value: $O(1)$ to update the accumulator
-  \item Removing a value: $O(1)$ to update the accumulator
-\end{itemize}
-\end{theorem}
-
-This is in contrast to a na\"ive re-fold which would require $O(n)$ time where $n$ is the size of the multiset.
-
 \section{Related Work}\label{sec:related}
 
 The problem of efficiently maintaining aggregations over changing data has been studied extensively.
