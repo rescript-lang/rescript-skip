@@ -485,15 +485,6 @@ In Skip's implementation, min is handled as a \emph{partial reducer}:
   \item Alternatively, one can maintain richer state (e.g., a sorted multiset of all values), making the remove operation invertible on that richer state---but this is no longer a constant-space reducer
 \end{itemize}
 
-\subsection{Assumptions in the Graph/Dead-Code Example}
-
-The graph example in the harness makes two simplifying assumptions:
-\begin{itemize}
-  \item \textbf{Deduplication across files:} contributions of the same node/root/edge from multiple files are de-duplicated. Removing a node/root/edge from one file removes it globally; if per-file multiplicities are required, the reducer would need to track reference counts.
-  \item \textbf{Node removal semantics:} when removing a node, incident edges are left intact for simplicity. This suffices for the dead-code view as implemented; stricter graph semantics would remove incident edges as well.
-\end{itemize}
-The incremental reachability update logic (incoming counts, spanning forest) is correct under these assumptions.
-
 \subsection{Dead Code Elimination via Reachability}
 
 We sketch a more complex example based on dead code elimination.
