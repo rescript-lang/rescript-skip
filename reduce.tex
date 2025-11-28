@@ -371,20 +371,6 @@ Applying the delta above (removing \$30, adding \$20) gives
 which matches the total obtained by recomputing from scratch on the updated multiset $C'(k) = \{30,50,20\}$.
 \end{example}
 
-\begin{lemma}[Cancelling a Multiset of Removals]\label{lem:fold-ominus-cancels}
-Let $R = (\iota, \oplus, \ominus)$ be a well-formed reducer.
-For any finite multiset $M$ and multiset $D \subseteq M$:
-\[
-\mathsf{fold}_\ominus\big(\mathsf{fold}_\oplus(\iota, M), D\big) = \mathsf{fold}_\oplus(\iota, M \setminus D)
-\]
-\end{lemma}
-
-\begin{proof}
-Enumerate $D$ as a sequence $[v_1,\dots,v_n]$.
-By well-formedness, $(a \oplus v_i) \ominus v_i = a$ for all reachable $a$.
-Pairwise commutativity of $\oplus$ and $\ominus$ lets us reorder additions and removals, so we can swap each $(\oplus v_i)$ next to its $(\ominus v_i)$ and cancel it, leaving precisely the fold over $M \setminus D$.
-\end{proof}
-
 \section{Correctness}\label{sec:correctness}
 
 We now characterize exactly when incremental updates are correct.
@@ -422,6 +408,48 @@ A reducer $R$ satisfies the \emph{incremental correctness property} if for all c
 For the sum reducer $R_{\mathsf{sum}}$, the incremental correctness property simply formalizes the familiar claim that ``subtracting the amounts of removed purchases and adding the amounts of new purchases yields the same total spend as recomputing the sum from scratch'' for every user and every delta.
 \end{example}
 
+\begin{lemma}[Cancellation for a Delta]\label{lem:delta-cancels}
+Let $R = (\iota, \oplus, \ominus)$ be a well-formed reducer and $C$ a collection.
+For any valid delta $\Delta = (\Delta^+, \Delta^-)$ for $C$ and key $k$, writing $M = C(k)$ and $M_0 = M \setminus \Delta^-(k)$, we have:
+\[
+\mathsf{fold}_\ominus\big(\mathsf{fold}_\oplus(\iota, M), \Delta^-(k)\big) = \mathsf{fold}_\oplus(\iota, M_0).
+\]
+\end{lemma}
+
+\begin{proof}
+Write $D = \Delta^-(k)$.
+We proceed by induction on the size of the multiset $D$.
+If $D = \emptyset$, then $\mathsf{fold}_\ominus(\mathsf{fold}_\oplus(\iota,M), D) = \mathsf{fold}_\oplus(\iota,M)$ by definition, and $M_0 = M$, so the claim holds.
+
+For the inductive step, suppose $D = D' \uplus \{v\}$ for some value $v$ and sub-multiset $D' \subseteq M$, and assume the statement holds for $D'$.
+Since $M = M_0 \uplus D = M_0 \uplus D' \uplus \{v\}$ and $\oplus$ is pairwise commutative, Lemma~1 (fold over union of multisets) gives:
+\[
+\mathsf{fold}_\oplus(\iota,M)
+  = \mathsf{fold}_\oplus\big(\mathsf{fold}_\oplus(\iota,M_0 \uplus D'), \{v\}\big)
+  = \mathsf{fold}_\oplus(\iota,M') \oplus v
+\]
+for the multiset $M' = M_0 \uplus D'$.
+Applying well-formedness with multiset $M'$ and value $v$ yields
+\[
+(\mathsf{fold}_\oplus(\iota,M') \oplus v) \ominus v = \mathsf{fold}_\oplus(\iota,M').
+\]
+Since $\mathsf{fold}_\oplus(\iota,M) = \mathsf{fold}_\oplus(\iota,M') \oplus v$, we have:
+\[
+\mathsf{fold}_\ominus(\mathsf{fold}_\oplus(\iota,M), \{v\}) = (\mathsf{fold}_\oplus(\iota,M') \oplus v) \ominus v = \mathsf{fold}_\oplus(\iota,M').
+\]
+Now $M' \setminus D' = (M_0 \uplus D') \setminus D' = M_0$, so by the induction hypothesis applied to $M'$ and $D'$ we obtain
+\[
+\mathsf{fold}_\ominus\big(\mathsf{fold}_\oplus(\iota,M'), D'\big)
+  = \mathsf{fold}_\oplus(\iota,M' \setminus D')
+  = \mathsf{fold}_\oplus(\iota,M_0).
+\]
+Since $\ominus$ is pairwise commutative, Lemma~1 applies to $\ominus$ as well, giving:
+\[
+\mathsf{fold}_\ominus(\mathsf{fold}_\oplus(\iota,M), D) = \mathsf{fold}_\ominus(\mathsf{fold}_\ominus(\mathsf{fold}_\oplus(\iota,M), \{v\}), D') = \mathsf{fold}_\ominus(\mathsf{fold}_\oplus(\iota,M'), D') = \mathsf{fold}_\oplus(\iota,M_0),
+\]
+which completes the proof.
+\end{proof}
+
 The following theorem shows that the inverse property is both necessary and sufficient for incremental correctness.
 
 \begin{theorem}[Characterization of Incremental Correctness]\label{thm:equivalence}
@@ -453,9 +481,9 @@ a = \mathsf{fold}_\oplus(\iota, M) = \mathsf{fold}_\oplus(\iota, M_0 \uplus \Del
 Let $a_0 = \mathsf{fold}_\oplus(\iota, M_0)$.
 Then $a = \mathsf{fold}_\oplus(a_0, \Delta^-(k))$.
 
-By Lemma~\ref{lem:fold-ominus-cancels} with $M = M_0 \uplus \Delta^-(k)$ and $D = \Delta^-(k)$:
+By Lemma~\ref{lem:delta-cancels} we have
 \[
-\mathsf{fold}_\ominus(a, \Delta^-(k)) = \mathsf{fold}_\oplus(\iota, (M_0 \uplus \Delta^-(k)) \setminus \Delta^-(k)) = \mathsf{fold}_\oplus(\iota, M_0) = a_0
+\mathsf{fold}_\ominus(a, \Delta^-(k)) = \mathsf{fold}_\oplus(\iota, M_0) = a_0.
 \]
 
 Therefore:
