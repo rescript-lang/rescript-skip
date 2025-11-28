@@ -462,6 +462,35 @@ and finally
 which completes the proof.
 \end{proof}
 
+\begin{example}[Delta cancellation for total spend]
+Continuing the purchase example, let $R_{\mathsf{sum}}$ be the sum reducer and consider key $k = \mathit{user1}$ with
+\[
+C(k) = \{30,30,50\}.
+\]
+Suppose we remove one \$30 purchase and keep the other two purchases unchanged, so
+\[
+\Delta^-(k) = \{30\}, \qquad \Delta^+(k) = \emptyset,
+\]
+and hence
+\[
+M = C(k), \quad D = \Delta^-(k), \quad M_0 = M \setminus D = \{30,50\}.
+\]
+Lemma~\ref{lem:delta-cancels} states that
+\[
+\mathsf{fold}_\ominus\big(\mathsf{fold}_\oplus(0, M), D\big)
+  = \mathsf{fold}_\oplus(0, M_0).
+\]
+Indeed, $\mathsf{fold}_\oplus(0, M) = 0 + 30 + 30 + 50 = 110$, so
+\[
+\mathsf{fold}_\ominus(110, \{30\}) = 110 - 30 = 80,
+\]
+while
+\[
+\mathsf{fold}_\oplus(0, M_0) = 0 + 30 + 50 = 80.
+\]
+Thus incrementally removing the multiset of cancelled purchases yields exactly the total spend over the remaining purchases.
+\end{example}
+
 The following theorem shows that the inverse property is both necessary and sufficient for incremental correctness.
 
 \begin{theorem}[Characterization of Incremental Correctness]\label{thm:equivalence}
