@@ -435,7 +435,9 @@ Applying well-formedness with multiset $M'$ and value $v$ yields
 \]
 Since $\mathsf{fold}_\oplus(\iota,M) = \mathsf{fold}_\oplus(\iota,M') \oplus v$, we have:
 \[
-\mathsf{fold}_\ominus(\mathsf{fold}_\oplus(\iota,M), \{v\}) = (\mathsf{fold}_\oplus(\iota,M') \oplus v) \ominus v = \mathsf{fold}_\oplus(\iota,M').
+\mathsf{fold}_\ominus(\mathsf{fold}_\oplus(\iota,M), \{v\})
+  = (\mathsf{fold}_\oplus(\iota,M') \oplus v) \ominus v
+  = \mathsf{fold}_\oplus(\iota,M').
 \]
 Now $M' \setminus D' = (M_0 \uplus D') \setminus D' = M_0$, so by the induction hypothesis applied to $M'$ and $D'$ we obtain
 \[
@@ -445,7 +447,17 @@ Now $M' \setminus D' = (M_0 \uplus D') \setminus D' = M_0$, so by the induction 
 \]
 Since $\ominus$ is pairwise commutative, Lemma~1 applies to $\ominus$ as well, giving:
 \[
-\mathsf{fold}_\ominus(\mathsf{fold}_\oplus(\iota,M), D) = \mathsf{fold}_\ominus(\mathsf{fold}_\ominus(\mathsf{fold}_\oplus(\iota,M), \{v\}), D') = \mathsf{fold}_\ominus(\mathsf{fold}_\oplus(\iota,M'), D') = \mathsf{fold}_\oplus(\iota,M_0),
+\mathsf{fold}_\ominus(\mathsf{fold}_\oplus(\iota,M), D)
+  = \mathsf{fold}_\ominus(\mathsf{fold}_\ominus(\mathsf{fold}_\oplus(\iota,M), \{v\}), D'),
+\]
+and using the equalities above,
+\[
+\mathsf{fold}_\ominus(\mathsf{fold}_\ominus(\mathsf{fold}_\oplus(\iota,M), \{v\}), D')
+  = \mathsf{fold}_\ominus(\mathsf{fold}_\oplus(\iota,M'), D'),
+\]
+and finally
+\[
+\mathsf{fold}_\ominus(\mathsf{fold}_\oplus(\iota,M'), D') = \mathsf{fold}_\oplus(\iota,M_0),
 \]
 which completes the proof.
 \end{proof}
