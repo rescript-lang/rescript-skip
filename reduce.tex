@@ -22,9 +22,10 @@
 
 \begin{abstract}
 We present a formal semantics for the \texttt{reduce} combinator in Skip~\cite{skip}, a reactive programming framework that maintains aggregated views of collections with automatic incremental updates.
+Skip lets developers define aggregation logic declaratively as pure functions over collections, while the runtime handles event routing, cache invalidation, and state synchronization.
 Skip exposes reducers as \textbf{first-class combinators}: a reducer $R = (\iota, \oplus, \ominus)$ is a reusable, composable value---not a callback tied to a specific engine context---that developers can apply uniformly across arbitrary reactive pipelines.
-Unlike streaming systems (Flink, Kafka Streams) that provide add/remove callbacks bound to specific operators, and unlike FRP and incremental computation frameworks that hide inverses internally, Skip surfaces the algebraic structure as a user-facing programming construct.
-This paper formalizes Skip's correctness condition---providing a user-facing specification not found in prior systems---and proves that incremental correctness holds \emph{if and only if} the reducer is well-formed (i.e., $\ominus$ is the inverse of $\oplus$), giving Skip users a precise specification for writing correct custom reducers.
+Unlike streaming systems (Flink, Kafka Streams) that provide add/remove callbacks bound to specific operators, and unlike FRP and incremental computation frameworks that hide inverses internally, Skip surfaces this algebraic structure as a user-facing programming construct.
+We formalize Skip's correctness condition and prove that incremental correctness holds \emph{if and only if} the reducer is well-formed (i.e., $\ominus$ is the inverse of $\oplus$), giving Skip users a precise, user-facing specification for writing correct custom reducers.
 \end{abstract}
 
 \section{Introduction}
@@ -37,6 +38,10 @@ The key to efficient updates is that Skip's \texttt{reduce} supports \emph{retra
 Skip exposes this capability through a \emph{reducer} abstraction $R = (\iota, \oplus, \ominus)$, where $\iota$ is an initial value, $\oplus$ is an add operation, and $\ominus$ is a remove operation.
 This allows $O(1)$ updates per change, rather than $O(n)$ recomputation.
 
+\paragraph{Declarative programming model.}
+Skip enables developers to write aggregation logic declaratively, composing reducers as pure, reusable values that express \emph{what} should be computed over collections.
+The Skip runtime maintains derived views and propagates incremental updates, so developers need not reason about event routing, cache invalidation, or state synchronization.
+
 \paragraph{Skip's user-facing combinators.}
 A distinguishing feature of Skip is that reducers are exposed as \textbf{user-facing combinators}---first-class programming constructs that developers use directly to build custom reactive services.
 Rather than being internal implementation details hidden from users, Skip allows developers to define their own reducers for domain-specific aggregations.
@@ -46,7 +51,7 @@ This design enables extensibility (custom aggregations), composability (reducers
 \paragraph{What distinguishes Skip's design.}
 Three aspects distinguish Skip's reducer from related systems:
 \begin{enumerate}
-  \item \textbf{First-class combinator, not callback.} Unlike Flink's \texttt{retract} methods or Kafka Streams' \texttt{Subtractor} interfaces---which are callbacks tied to specific engine contexts---Skip's reducer is a standalone, reusable value applicable to any reactive collection.
+  \item \textbf{First-class combinator, not callback.} Unlike Flink's \texttt{retract} methods or Kafka Streams' \texttt{Subtractor} interfaces---which are callbacks tied to specific engine contexts---Skip's reducer is a standalone, reusable value applicable to any reactive collection. This enables a declarative programming model where developers compose logic without infrastructure concerns; the reactive runtime handles event propagation and cache management transparently.
   \item \textbf{User-facing inverse.} Unlike FRP libraries (which provide only append-style folds) and incremental computation frameworks (which handle inverses internally), Skip exposes $\ominus$ as an explicit user-defined operation.
   \item \textbf{Formal correctness.} While systems like DBSP and differential dataflow rest on rigorous algebraic foundations internally, no prior system provides a formal specification that users can apply when defining their own reducers; this paper fills that gap.
 \end{enumerate}
@@ -668,53 +673,57 @@ In Skip's implementation, min is handled as a \emph{partial reducer}:
 
 \section{Related Work}\label{sec:related}
 
-The problem of efficiently maintaining aggregations over changing data has been studied extensively.
-We position Skip's design relative to streaming systems, reactive programming, and incremental computation, and describe our formal contribution.
+The problem of efficiently maintaining aggregations over changing data has been studied extensively across streaming systems, reactive programming frameworks, and incremental computation.
+We organize our discussion around a key design dimension: \emph{what operational concerns must developers understand and manage?}
+Skip's design philosophy---infrastructure abstraction paired with exposed algebraic structure---positions it within a broader movement toward declarative programming models where developers express domain logic without infrastructure concerns~\cite{zedlewski2025eventhidden}.
 
-\paragraph{Skip's design: combinators vs.\ callbacks.}
-Skip's reducer $R = (\iota, \oplus, \ominus)$ is a \emph{first-class combinator}---a reusable, composable value that can be applied to any reactive collection via $\mathsf{reduce}_R$.
-This differs from systems that allow users to supply add/remove \emph{callbacks} tied to specific engine internals.
-Callbacks in other systems are bound to particular contexts (keyed tables, windows, SQL queries); Skip's combinator is context-agnostic and portable across different reactive pipelines.
+\paragraph{Infrastructure-exposed streaming systems.}
+Traditional streaming systems require developers to understand and work with operational concerns: how data flows through pipelines, when windows trigger, how state is partitioned, and how retractions are processed.
+These systems expose infrastructure complexity, forcing developers to think about event propagation, state management, and update mechanisms.
 
-\paragraph{Streaming systems with add/remove callbacks.}
-Several streaming systems allow users to supply both add and remove logic, but not as a first-class combinator:
+\emph{Apache Flink} (Table API) allows user-defined aggregates with \texttt{accumulate} and \texttt{retract} methods, but these are lifecycle methods on a stateful object tied to Flink's query planner and retraction-message algebra.
+\emph{Apache Kafka Streams} provides \texttt{Aggregator} and \texttt{Subtractor} interfaces for KTable aggregations, but these are callbacks passed to \texttt{aggregate()} and tightly bound to KTable's update mechanism.
+\emph{Esper CEP} supports \texttt{enter}/\texttt{leave} callbacks, but only within sliding-window contexts.
+In all cases, the add/remove logic is configuration for a specific operator bound to engine internals, not a reusable, portable combinator.
+Moreover, these systems expose their event-driven, retraction-based architectures; developers must understand how retractions propagate, when state is synchronized, and how correctness is ensured.
 
-\emph{Apache Flink} (Table API) has user-defined aggregates with \texttt{accumulate} and \texttt{retract} methods.
-These are lifecycle methods on a stateful object that Flink's query planner plugs into its retraction-message algebra---not a standalone combinator.
+\emph{Apache Beam} and \emph{Spark Streaming} take a different approach: they hide user-defined inverse operations entirely, handling retractions internally via recomputation or diffing.
+While this simplifies the developer interface, it removes the ability to express domain-specific inverse operations, and developers must still reason about operational concerns like windowing, triggering, and state management.
 
-\emph{Apache Kafka Streams} provides \texttt{Aggregator} (add) and \texttt{Subtractor} (remove) interfaces for KTable aggregations.
-These are callbacks passed to the \texttt{aggregate()} method, tightly bound to KTable's update mechanism.
+\paragraph{Infrastructure-hidden, structure-hidden systems.}
+At the other extreme, some systems hide both infrastructure complexity and the underlying algebraic structure, working at higher levels of abstraction.
 
-\emph{Esper CEP} supports \texttt{enter}/\texttt{leave} callbacks for windowed aggregation, but only within sliding-window contexts.
+\emph{Differential dataflow}~\cite{differentialdataflow} and \emph{DBSP}~\cite{dbsp} provide rigorous foundations for incremental computation using Z-sets and abelian groups.
+These frameworks internally ensure that all built-in aggregations have inverses, but users typically work at the level of SQL queries or dataflow graphs without explicitly defining $\oplus$ and $\ominus$.
+The algebraic structure exists but is hidden; users cannot define custom reducers that exploit invertibility for domain-specific aggregations.
 
-In all cases, the add/remove logic is configuration for a specific operator, not a reusable combinator.
-Moreover, none of these systems provide formal correctness conditions---they document informally what the remove function should do, but correctness is the user's responsibility.
+\emph{Functional reactive programming} libraries (Fran, Yampa, Reactive Banana~\cite{frp}) and UI-oriented frameworks (React, Vue, Svelte, Solid) expose declarative combinators like map, filter, and scan/foldp, hiding infrastructure concerns like event routing and cache invalidation.
+However, state updates are expressed as opaque folds; the runtime does not know or exploit user-defined inverses.
+Developers work declaratively, but without access to the algebraic structure needed for efficient incremental updates with removals.
 
-\paragraph{Systems without user-defined remove.}
-\emph{Apache Beam} and \emph{Spark Streaming} do not expose user-defined inverse operations; they handle retractions internally via recomputation or diffing.
-\emph{Functional reactive programming} libraries (Fran, Yampa, Reactive Banana~\cite{frp}) provide append-only fold combinators (\texttt{foldp}, \texttt{accumE}) with no built-in remove.
-\emph{Incremental computation} frameworks (Adapton, Jane Street's Incremental) support removal internally via dependency tracking, but do not expose a user-facing inverse operation.
+\emph{Incremental computation} frameworks (Adapton, Jane Street's Incremental) hide infrastructure complexity via dependency tracking, but also hide the inverse operation; removal is handled internally through dependency graphs rather than explicit algebraic inverses.
 
-\paragraph{Reactive JS and FRP streams.}
-UI-oriented reactive frameworks (React, Vue, Svelte, Solid) and stream/FRP libraries (RxJS, Elm, Yampa, Reactive Banana) expose push-based signals or events with combinators like map, filter, merge, combineLatest, and scan/foldp.
-They offer declarative wiring of time-varying values and typically avoid duplicate work via topological scheduling, but state updates are expressed as opaque folds; the runtime does not know or exploit user-defined inverses.
-As a result, invertibility and O(1) maintenance for removals are left to user code, whereas Skip surfaces add/remove as a first-class contract the runtime can optimize.
+\paragraph{Skip's approach: infrastructure-hidden, structure-exposed.}
+Skip's design occupies a unique position: it hides infrastructure complexity while exposing algebraic structure.
+Developers write aggregation logic declaratively as pure functions over collections, without thinking about event routing, cache invalidation, or state synchronization; the reactive runtime handles these operational concerns automatically.
+At the same time, Skip exposes the algebraic structure of reducers as first-class combinators: developers define $\oplus$ and $\ominus$ explicitly, enabling domain-specific aggregations with formal correctness guarantees.
 
-\paragraph{Differential Dataflow and DBSP.}
-Differential dataflow~\cite{differentialdataflow} and DBSP~\cite{dbsp} provide rigorous foundations for incremental computation using Z-sets (multisets with integer multiplicities) and abelian groups.
-These frameworks \emph{internally} ensure that all built-in aggregations have inverses, but the user typically works at a higher level (SQL, dataflow graphs) without explicitly defining $\oplus$ and $\ominus$.
-Skip's design surfaces this algebraic structure as a user-facing combinator; this paper provides the formal analysis.
+This design aligns with a broader trend toward ``event-hidden architectures'' seen in modern distributed systems.
+Just as SQL databases hide query execution plans while exposing relational algebra, and just as React hides DOM manipulation while exposing declarative components, Skip hides event queues and reactive runtime internals while exposing mathematical combinators.
+The runtime remains event-driven under the covers, but developers work at the level of what to compute, not how events propagate.
 
-\paragraph{Database view maintenance.}
+Skip's reducer $R = (\iota, \oplus, \ominus)$ is a first-class combinator---a reusable, composable value applicable to any reactive collection via $\mathsf{reduce}_R$, not a callback tied to specific engine contexts.
+This enables developers to define custom aggregations (e.g., domain-specific metrics, business logic) that compose naturally with other Skip combinators, while the runtime automatically handles incremental updates, dependency tracking, and cache management.
+
+\paragraph{Database view maintenance and aggregate classification.}
 The database literature classifies aggregates as \emph{distributive}, \emph{algebraic}, or \emph{holistic}~\cite{viewmaintenance}.
-Skip's well-formed reducers correspond to \emph{invertible distributive aggregates}.
+Skip's well-formed reducers correspond to \emph{invertible distributive aggregates}: the fold can be computed over partitions independently (distributive), and individual contributions can be removed using the inverse operation (invertible).
 Tangwongsan et al.~\cite{slidingwindow} note that ``prior work often relies on aggregation functions to be invertible'' for efficient sliding-window maintenance.
 Yin et al.~\cite{incgraph} require inverse functions for incremental graph aggregation.
-These works focus on algorithmic techniques; our contribution is to formalize correctness for Skip's user-facing abstraction.
+These works focus on algorithmic techniques; our contribution is to formalize correctness for Skip's user-facing abstraction, providing developers with a precise specification for writing correct custom reducers.
 
-\paragraph{Summary: Skip's design and our contribution.}
-Skip provides a first-class reduce combinator $R = (\iota, \oplus, \ominus)$ with user-defined add and remove operations, applicable across arbitrary reactive contexts.
-Skip's documentation specifies an informal correctness condition for user-defined reducers.
+\paragraph{Our formal contribution.}
+Skip's documentation specifies an informal correctness condition for user-defined reducers: the result of applying the runtime's sequence of remove/add calls must equal recomputing from scratch.
 Our contribution is to:
 \begin{enumerate}
   \item Formalize this correctness condition as a well-formedness property
@@ -722,8 +731,9 @@ Our contribution is to:
   \item Connect Skip's design to the theory of invertible distributive aggregates
 \end{enumerate}
 This gives Skip users a precise specification for writing correct custom reducers, backed by a complete formal characterization.
+The well-formedness condition is a clear, local specification: developers define $\oplus$ and $\ominus$ explicitly and reason about whether $(a \oplus v) \ominus v = a$ holds for all reachable accumulator states $a$, rather than about the runtime's operational behavior.
 
-\begin{thebibliography}{9}
+\begin{thebibliography}{10}
 
 \bibitem{skip}
 Skip Team.
@@ -769,6 +779,11 @@ In \textit{Proceedings of ICFP}, pages 263--273, 1997.
 Shufeng Yin, Huanchen Zhang, Zhengyi Yang, Wentao Han, Wenguang Chen, and Yingxia Shao.
 GraphBolt: Dependency-driven synchronous processing of streaming graphs.
 In \textit{Proceedings of ICDE}, 2022.
+
+\bibitem{zedlewski2025eventhidden}
+Charles Zedlewski.
+Event-hidden architectures.
+SkipLabs Blog, \url{https://skiplabs.io/blog/event-hidden-arch}, April 2025.
 
 \end{thebibliography}
 
