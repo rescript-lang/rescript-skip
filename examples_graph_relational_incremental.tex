@@ -1,0 +1,61 @@
+% Graph and relational incremental maintenance examples
+\begin{example}[DBToaster-style incremental SQL view service]
+Input base collections correspond to relational tables, for example \texttt{Orders(orderId, customerId, amount)} and \texttt{Customers(customerId, region)}.
+Define a materialized view \texttt{RegionTotals(region $\to$ Money)} that reflects \texttt{SELECT region, SUM(amount) FROM Orders JOIN Customers USING (customerId) GROUP BY region}.
+The service maintains:
+  (i) an intermediate keyed collection \texttt{OrderContrib(customerId $\to$ Money)} equal to the sum of \texttt{amount} per customer; and
+  (ii) the final view \texttt{RegionTotals} as the sum over \texttt{OrderContrib} joined with \texttt{Customers}.
+On insert of an \texttt{Orders} row, it increments \texttt{OrderContrib[customerId]} by \texttt{amount} and then increments \texttt{RegionTotals[region(customerId)]} accordingly; on delete, it subtracts the same contributions.
+This captures the DBToaster idea of maintaining delta views and updating aggregates via plus/minus operations on precomputed partial results, rather than recomputing full joins.
+\end{example}
+
+\begin{example}[F-IVM-style ring-based analytics service]
+Consider a log-processing backend with base collection \texttt{Events(key, payload)}, where \texttt{payload} is an element of a user-chosen ring (e.g.\ numeric sums/products for counts, or more complex structures for ML gradients).
+Define derived views by interpreting SQL-like queries as expressions over the payload ring: for example, a view \texttt{KeyStats(key)} whose payload is maintained by ring addition and multiplication as events join or aggregate.
+On insert of an event, the service adds the event’s payload into the appropriate keys; on delete, it subtracts the payload using the ring’s additive inverse.
+This mirrors F-IVM’s approach of treating query maintenance as updates in a factorized payload domain with well-defined add/remove operations.
+\end{example}
+
+\begin{example}[Dynamic acyclic join (Yannakakis-inspired) service]
+Suppose base collections \texttt{R(A,B)}, \texttt{S(B,C)}, and \texttt{T(C,D)} participate in an acyclic join query \texttt{Q(A,B,C,D) = R JOIN S JOIN T}.
+The service maintains:
+  (i) semi-join filtered projections such as \texttt{R'} where only tuples with a matching \texttt{B} in \texttt{S} are stored;
+  (ii) a join index mapping join-key combinations (e.g.\ \texttt{(B,C)}) to participating tuples; and
+  (iii) a materialized view \texttt{Q} or aggregate over \texttt{Q}.
+On insert of a tuple into one relation (say \texttt{R}), the service traverses the join tree: it finds matching tuples in \texttt{S}, then in \texttt{T}, and inserts the resulting joined tuples into \texttt{Q}; deletions remove just the joined tuples involving the deleted base tuple.
+This specification captures Dynamic Yannakakis’ coordinated delta propagation along a join tree without recomputing the entire join.
+\end{example}
+
+\begin{example}[Counting and DRed-style materialized view service]
+Given a base relation \texttt{R} and a derived view defined by a recursive or non-recursive rule (e.g.\ reachability or a multi-join query), the service maintains:
+  (i) for each derived tuple \texttt{t}, a count of how many derivations (proofs) support \texttt{t}; and
+  (ii) the materialized view containing exactly those tuples with positive counts.
+On insertion of a base fact, the system derives new tuples according to the rules and increments their counts; on deletion, it decrements counts (the Counting algorithm).
+If a count drops to zero, the tuple is removed from the view; in DRed-style handling of recursion, the system may re-derive some tuples using the remaining facts to ensure no reachable tuples are lost.
+This combines algebraic inverses (for counts) with selective recomputation.
+\end{example}
+
+\begin{example}[Differential dataflow / DBSP-style weighted collections]
+Model a collection as a mapping \texttt{Key $\to$ (Value, weight $\in \mathbb{Z}$)}, where each base update is encoded as a small multiset of weighted records (e.g.\ +1 for insertion, -1 for deletion).
+Define a service that maintains one or more derived collections (joins, group-bys, filters) by algebraically combining and canceling these weights along a dataflow graph.
+Each operator (e.g.\ join, map, reduce) specifies how to transform input weights into output weights; for example, a group-by sum view computes, per key, the weighted sum of contributions.
+The service’s update procedure simply applies incoming weighted updates and recomputes affected downstream weights, removing any records whose cumulative weight becomes zero.
+\end{example}
+
+\begin{example}[Incremental graph metrics service (Ingress, GraphBolt-style)]
+Input collection \texttt{Edges : (src : NodeId, dst : NodeId)} and optionally per-node attributes.
+The service maintains per-node views such as:
+  (i) \texttt{degree : NodeId $\to$ int}, counting incident edges via a per-node count reducer;
+  (ii) \texttt{rank : NodeId $\to$ float}, where each node’s rank is the sum of neighbor contributions (e.g.\ PageRank-style updates) maintained by per-node reducers over incoming edges; and
+  (iii) neighborhood summaries (e.g.\ average neighbor attribute) using enriched-state reducers per node.
+On edge insert, the service updates the relevant nodes’ accumulators (e.g.\ increment degree for both endpoints, add contributions to \texttt{rank}); on edge delete, it applies inverse updates.
+This specification reflects vertex-centric systems where user-defined inverse functions or algebraic structure enable efficient incremental graph metrics.
+\end{example}
+
+\begin{example}[Iterative graph algorithms with fixpoints]
+For algorithms such as BFS, single-source shortest paths, or label propagation, define:
+  (i) base collections \texttt{Edges(src, dst, weight?)} and \texttt{InitialSeeds : NodeId} (e.g.\ starting nodes); and
+  (ii) a derived per-node collection \texttt{State : NodeId $\to$ Value} (e.g.\ distance, label) updated iteratively.
+Each iteration applies local reducer-like updates to \texttt{State} based on neighbors (e.g.\ new distance is \texttt{min(current, neighborDistance + weight)}), but the global algorithm runs until a fixpoint (no state changes) is reached.
+The service specification therefore includes both the local update rule (a reducer per node) and a fixpoint scheduler that repeatedly applies updates and propagates changes until convergence, distinguishing it from single-step reducer services.
+\end{example}

@@ -1,0 +1,38 @@
+% History, undo/redo, and ordered-state patterns
+\begin{example}[Elm-style undo/redo history service]
+Model an application state type \texttt{AppState} and an input collection \texttt{actions : Unit $\times$ Action}, where \texttt{Action} encodes user commands (draw, erase, move, etc.).
+The service maintains a single-key resource \texttt{History : Unit $\to$ (past : array<AppState>, present : AppState, future : array<AppState>)}.
+On each new \texttt{Action} applied to \texttt{present}, the service:
+  (i) appends the old \texttt{present} to \texttt{past},
+  (ii) discards any states in \texttt{future}, and
+  (iii) computes the new \texttt{present} by applying the action.
+Separate control inputs \texttt{undo} and \texttt{redo} move the focus backward or forward in the history by shifting one element between \texttt{past}, \texttt{present}, and \texttt{future}, providing time-travel semantics analogous to Elm architecture examples.
+\end{example}
+
+\begin{example}[Redux-like time-travel state service]
+Define a base collection \texttt{commands : Unit $\times$ Command} and a service resource \texttt{Timeline : Unit $\to$ (past : array<State>, present : State, future : array<State>)} for some application \texttt{State} type.
+The service offers three operations modeled as updates:
+  (i) \emph{applyCommand}: given a \texttt{Command}, computes a new \texttt{present} from the old one, pushes the old \texttt{present} onto \texttt{past}, and clears \texttt{future};
+  (ii) \emph{undo}: when \texttt{past} is non-empty, pops the last state from \texttt{past}, pushes the current \texttt{present} onto \texttt{future}, and sets \texttt{present} to the popped state;
+  (iii) \emph{redo}: symmetrically moves one state from \texttt{future} back to \texttt{present}, pushing the old \texttt{present} onto \texttt{past}.
+This mirrors Redux undo/redo recipes where the store tracks a linear history of states.
+\end{example}
+
+\begin{example}[Svelte-style undoable store service]
+Consider an input collection \texttt{updates : Unit $\times$ Update}, where \texttt{Update} transforms an \texttt{AppState}.
+The service keeps a resource \texttt{Undoable : Unit $\to$ (history : array<AppState>, index : int)}, where \texttt{history} is a non-empty array of snapshots and \texttt{index} is the current position.
+On a new update, it:
+  (i) truncates \texttt{history} to elements \texttt{[0..index]} (discarding any redo states),
+  (ii) computes a new state by applying the update to \texttt{history[index]}, appends it to \texttt{history}, and
+  (iii) sets \texttt{index := index + 1}.
+On \texttt{undo}, when \texttt{index > 0} it decrements \texttt{index}; on \texttt{redo}, when \texttt{index < |history|-1} it increments \texttt{index}.
+The \texttt{currentState} view is simply \texttt{history[index]}, matching Svelte undoable store patterns.
+\end{example}
+
+\begin{example}[FRP-style resettable accumulator service]
+Input consists of two collections:
+  \texttt{events : KeyId $\times$ Event} and \texttt{resets : KeyId $\times$ unit}.
+For each \texttt{KeyId}, the service maintains a state \texttt{acc : Accumulator} (e.g.\ a running text, count, or other summary) and a \texttt{lastResetTime} or reset epoch marker.
+On add of an \texttt{events} entry for key \texttt{k}, it updates \texttt{acc[k]} by folding in the event (e.g.\ appending text or incrementing a counter); on add of a \texttt{resets} entry for \texttt{k}, it resets \texttt{acc[k]} to its initial value.
+This yields per-key aggregations over epochs separated by reset events, analogous to FRP text-input-with-clear examples where state is accumulated between explicit clears.
+\end{example}

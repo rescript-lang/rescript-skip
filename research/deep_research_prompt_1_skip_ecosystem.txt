@@ -1,0 +1,22 @@
+You are a deep research assistant.
+Goal: build a catalogue of actual aggregation patterns used in Skip and SkipRuntime, focusing on `reduce` and related combinators.
+
+1. Start from these entry points:
+   - https://github.com/SkipLabs/skip
+   - https://github.com/SkipLabs (any other public repos)
+   - https://skiplabs.io/blog and linked docs.
+2. Find all non-trivial uses of reducers / aggregations:
+   - Any custom reducer or combinator that aggregates over collections (sum, count, avg, histograms, window-like, min/max with extra state, etc.).
+   - Any textual description of “views”, “aggregates”, “materialized views”, or “incremental summaries” in docs or blog posts.
+3. For each example, record:
+   - Name / location (repo, file path, function/method name, blog URL + section).
+   - Informal description of what the aggregation computes.
+   - Whether it appears to be:
+     - (a) clearly expressible as a well-formed Skip reducer with an inverse,
+     - (b) naturally partial (needs fallback/recompute or richer state), or
+     - (c) outside the reducer model entirely (e.g., needs ordering, windows, sessions, or holistic operations).
+   - Any hints about state shape (simple accumulator vs enriched state like (sum,count)).
+4. Output:
+   - A concise table or structured list of 15–30 examples, grouped by type (simple aggregates, window-like, business metrics, etc.).
+   - A short summary of patterns that recur across multiple services or posts.
+

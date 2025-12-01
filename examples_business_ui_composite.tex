@@ -1,0 +1,36 @@
+% Composite business metrics and multi-stream/UI summaries
+\begin{example}[Business KPIs in Skip-style services]
+A reactive backend for an e-commerce site exposes three KPI resources:
+  (i) \emph{categoryRevenue} with input collection \texttt{sales : CategoryId $\times$ Sale}, where each sale has an \texttt{amount} field; the resource is a collection \texttt{CategoryId $\to$ Money} maintained by mapping each sale to its category and reducing with a sum reducer over \texttt{amount};
+  (ii) \emph{portfolioBySector} with input \texttt{positions : SecurityId $\times$ Position}, where \texttt{Position} includes \texttt{sector} and \texttt{shares, price}; a mapper emits \texttt{(sector, shares * price)} and a sum reducer computes total portfolio value per sector;
+  (iii) \emph{activeUserCounts} with input \texttt{memberships : GroupId $\times$ UserId} plus a global \texttt{activeUsers : UserId $\times$ Status}; the service defines collections \texttt{ActivePerGroup : GroupId $\to$ Int} (count of active members per group, via a count reducer) and \texttt{ActiveGlobal : Unit $\to$ Int} (total number of active users, by mapping all active users to a single key and counting).
+\end{example}
+
+\begin{example}[Streaming analytics dashboard service]
+A monitoring service ingests an input collection \texttt{requests : ServiceId $\times$ RequestEvent}, where each event records \texttt{serviceId}, a \texttt{success : bool} flag, and a timestamp.
+It exposes resources:
+  (i) \emph{requestThroughput} as \texttt{ServiceId $\to$ Int}, counting total requests per service with a per-key count reducer;
+  (ii) \emph{errorCounts} as \texttt{ServiceId $\to$ Int}, counting failed requests via a mapper that keeps only events with \texttt{success = false} and a count reducer;
+  (iii) \emph{errorRates} as \texttt{ServiceId $\to$ Float}, computed either by a derived view \texttt{errorCounts / requestThroughput} or by reducing into an enriched state \texttt{(errors, total)} per service and projecting the ratio.
+Optionally, a time-bucketed key (e.g.\ \texttt{(ServiceId, HourBucket)}) models per-interval KPIs without introducing an explicit window operator.
+\end{example}
+
+\begin{example}[UI-derived business metrics service]
+A customer-facing backend maintains input collections
+  \texttt{cartItems : UserId $\times$ CartItem} (where \texttt{CartItem} has \texttt{productId, quantity, unitPrice}) and
+  \texttt{reviews : ProductId $\times$ Rating} (where \texttt{Rating} has a numeric \texttt{score}).
+It exposes:
+  (i) \emph{cartTotals : UserId $\to$ Money}, mapping each cart item to \texttt{(userId, quantity * unitPrice)} and reducing with a sum reducer per user;
+  (ii) \emph{averageRating : ProductId $\to$ Float}, using an enriched-state reducer that maintains \texttt{(sum, count)} of scores per product and outputs \texttt{sum / count}.
+These resources correspond to totals and averages that front-end frameworks (Redux, Vue, Svelte, MobX) commonly compute in selectors or computed properties, but here are maintained reactively on the server.
+\end{example}
+
+\begin{example}[Composite metrics and conversion funnels]
+A product-analytics service ingests an input collection
+  \texttt{events : UserId $\times$ FunnelEvent}, where each event has a \texttt{stage $\in$ \{visit, signup, addToCart, purchase\}} and an optional \texttt{timestamp}.
+The service defines several derived collections:
+  (i) \emph{perStageCounts : Stage $\to$ Int}, counting how many distinct users ever reached each stage (e.g.\ via a set-valued reducer or a distinct-count pattern per stage);
+  (ii) \emph{funnelRatios : StagePair $\to$ Float}, computing ratios such as \texttt{signups / visits} or \texttt{purchases / signups} by combining the per-stage counts;
+  (iii) optionally \emph{timeBucketedFunnels : (Stage, TimeBucket) $\to$ Int} by including a time bucket in the key, enabling per-day or per-hour funnel analysis.
+These resources together specify a reactive “conversion funnel” service, where all KPIs update automatically as new events arrive.
+\end{example}

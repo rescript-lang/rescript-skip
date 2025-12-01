@@ -1,0 +1,19 @@
+You are a deep research assistant.
+Goal: identify incremental view maintenance and incremental graph examples that use inverse operations or algebraic structure, to test whether a Skip-style reducer calculus can cover them.
+
+1. Use these as starting points:
+   - Incremental view maintenance: DBToaster, F-IVM, Dynamic Yannakakis, classic view-maintenance literature.
+   - Incremental graph processing: Yin et al. (GraphBolt) and systems like Ingress.
+2. Extract example queries or algorithms where:
+   - Inverses or delta operators are crucial for performance.
+   - Aggregations over edges/vertices are maintained incrementally (degrees, triangle counts, reachability summaries, etc.).
+3. For each example, record:
+   - Source (paper, system docs) and a short description.
+   - The core aggregation or view being maintained.
+   - Whether the update behavior could be seen as:
+     - a per-key multiset reducer with some enriched state, or
+     - something inherently graph-structural that does not fit a simple collection+reducer shape.
+4. Output:
+   - A curated list of about 10–20 examples, with emphasis on ones that might be expressible in Skip if we design the right reducer/state patterns.
+   - A short summary of which examples look like realistic stretch-goals for Skip’s expressivity versus clear non-goals.
+

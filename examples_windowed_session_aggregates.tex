@@ -1,0 +1,55 @@
+% Windowed, session-based, and time-bounded views
+\begin{example}[Sliding time-window aggregate service (Skip conceptual)]
+Input collection \texttt{events : (KeyId, Timestamp) $\times$ Payload}, with wall-clock or logical timestamps.
+The service exposes views such as \texttt{lastHourCount : KeyId $\to$ int} or \texttt{lastHourSum : KeyId $\to$ Number}, defined conceptually as counts or sums over events with timestamps in the interval \texttt{[now - 1h, now]}.
+An external scheduler or time-based process is responsible for:
+  (i) inserting new events with their timestamps, and
+  (ii) deleting events once they fall outside the window, causing the corresponding per-key reducers to subtract their contributions.
+This yields sliding-window metrics by coupling per-key reducers with explicit time-based eviction.
+\end{example}
+
+\begin{example}[Session-based aggregation service (Skip conceptual, Flink/Kafka-inspired)]
+Input collection \texttt{userEvents : (UserId, Timestamp) $\times$ Event}, ordered by arrival time.
+Sessions are defined per user by an inactivity gap parameter \texttt{G} (e.g.\ 30 minutes).
+A separate sessionization component maintains a mapping \texttt{sessionId : (UserId, Timestamp) $\to$ SessionId} by grouping consecutive events for a user whose inter-arrival gaps are less than \texttt{G}.
+The reactive service then maintains per-session metrics via a collection \texttt{sessionMetrics : SessionId $\to$ MetricState} (e.g.\ event count, total duration), updated with a simple reducer per \texttt{SessionId}.
+As sessions merge or close, the sessionization layer adjusts keys (splitting/merging \texttt{SessionId}s) and the reducers follow suit, mirroring Flink/Kafka session window counts.
+\end{example}
+
+\begin{example}[Fixed and sliding window sum/average service (Flink, Kafka Streams, Spark, Beam)]
+Input collection \texttt{measurements : (KeyId, WindowId) $\times$ float}, where \texttt{WindowId} encodes a tumbling or sliding time bucket (e.g.\ \texttt{(startTime, endTime)}).
+For each \texttt{(KeyId, WindowId)}, the service maintains accumulators \texttt{sum} and \texttt{count} and exposes views:
+  (i) \texttt{windowSum : (KeyId, WindowId) $\to$ float} and
+  (ii) \texttt{windowAvg : (KeyId, WindowId) $\to$ float} as \texttt{sum / count} when \texttt{count > 0}.
+Windowing logic (assignment of events to one or more \texttt{WindowId}s and retirement of obsolete windows) is handled externally; within each window bucket, the aggregator is a standard per-key fold.
+\end{example}
+
+\begin{example}[Session window count service (Flink, Kafka Streams)]
+Input an event stream \texttt{events : (SessionKey, Timestamp) $\times$ Event}, where \texttt{SessionKey} might be derived from user or IP.
+A session manager groups events into session identifiers \texttt{SessId} based on inactivity gaps and emits \texttt{(SessId, Event)} pairs.
+The service maintains \texttt{sessionCounts : SessId $\to$ int}, incrementing on each event in the session; when a session closes (as determined by the session manager), the final count is retained or moved to a historical collection, and the live \texttt{SessId} entry is retired.
+This matches streaming session-window count semantics while keeping counting itself as a simple reducer.
+\end{example}
+
+\begin{example}[Materialize-style time-bounded active count service]
+Input collection \texttt{intervalEvents : KeyId $\times$ (startTs : Time, endTs : Time)} representing validity intervals for each key.
+The service defines a view \texttt{activeNow : KeyId $\to$ int} that, for the current logical time \texttt{t}, counts how many intervals for each key satisfy \texttt{startTs $\le$ t < endTs}.
+Implementation-wise, updates can be modeled as two streams: \texttt{(+1)} at \texttt{startTs} and \texttt{(-1)} at \texttt{endTs}, aggregated into a time-indexed collection; evaluating at time \texttt{t} sums all contributions up to \texttt{t}.
+This mirrors Materialize queries that filter by \texttt{mz\_logical\_timestamp()} to report currently active records.
+\end{example}
+
+\begin{example}[RxJS-style sliding window and moving-average service]
+Input collection \texttt{samples : (StreamId, Timestamp) $\times$ float}.
+For each \texttt{StreamId}, the service maintains a bounded buffer of the last \texttt{N} samples or samples within the last \texttt{T} units of time, along with a running sum.
+On insertion of a new sample, it adds the value to the buffer and sum; periodically (or on each insert), it evicts samples older than the configured window (by count or time), subtracting their values from the sum.
+A view \texttt{movingAvg : StreamId $\to$ float} returns \texttt{sum / bufferSize} for each stream, replicating RxJS sliding-window moving-average operators in a Skip-style service.
+\end{example}
+
+\begin{example}[Text input with clear as window delimiter service (Fran/Fruit-style FRP)]
+Input collections:
+  (i) \texttt{keystrokes : InputId $\times$ Char} for character input events; and
+  (ii) \texttt{clears : InputId $\times$ unit} for explicit clear actions.
+For each \texttt{InputId}, the service maintains current text as a string accumulator.
+On keystroke events, it appends characters to the current text; on a clear event, it resets the text to the empty string, effectively starting a new logical window of aggregation.
+The view \texttt{currentText : InputId $\to$ string} exposes the text since the last clear, mirroring FRP examples where accumulation is reset by a “clear” signal.
+\end{example}
