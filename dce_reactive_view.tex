@@ -334,4 +334,17 @@ as a \texttt{LazyCompute} or service module that:
 This preserves the algebraic guarantees where they apply (Layer~1) while accommodating the global,
 graph-shaped logic of DCE in a custom reactive compute node (Layer~2).
 
+\section{Layer 2 as an invertible reducer?}
+Conceptually, Layer~2 consumes graph deltas and maintains liveness. One might ask whether it could be packaged as a single invertible reducer in the sense of \texttt{reduce.tex}, with some accumulator $A$ and update operations $(\oplus,\ominus)$ that:
+\begin{itemize}
+  \item are pairwise commutative (order-independent) and satisfy the inverse law, and
+  \item from which the current live set can be read off as a projection of $A$.
+\end{itemize}
+There is a trivial positive answer and a negative answer that explains why we do not pursue this design:
+\begin{itemize}
+  \item \emph{Trivial positive.} Take $A$ to contain the Layer~1 graph $G$ together with any Layer~2 state, and let $\oplus,\ominus$ be exactly the Layer~1 multiset add/remove on $G$ (with liveness recomputed or updated as a view). This is an invertible reducer, but it is just ``Layer~1 reducer + derived view'' and does not add any new algebraic structure for liveness.
+  \item \emph{Negative for smaller $A$.} Any attempt to shrink $A$ to something that only stores Layer~2 summaries (e.g.\ just live/dead sets and refcounts) forgets information about the graph (such as edges between currently dead nodes) that can affect the liveness of future updates. Two different graphs can induce the same summary state but respond differently to a new fragment, so no single pair of operations $(\oplus,\ominus)$ on summaries can both satisfy the reducer laws and coincide with the graph-based specification for all inputs.
+\end{itemize}
+For this reason we keep the split: Layer~1 is an invertible reducer over graph fragments; Layer~2 is a graph algorithm layered on top of that reducer, not an invertible reducer in its own right.
+
 \end{document}
