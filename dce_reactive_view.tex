@@ -1,0 +1,337 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\title{Reactive Dead Code Elimination (DCE) as Reducers and Mappers}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Problem}
+Given a distributed program graph split across files, each file contributes:
+\begin{itemize}
+  \item nodes (definitions),
+  \item roots (entry points that must stay live),
+  \item edges (references / call edges between nodes).
+\end{itemize}
+A node is \emph{dead} if it is not reachable from any root in the global graph.
+Files change over time via \texttt{+} (additions) and \texttt{-} (removals) of nodes/roots/edges.
+We want a two-layer reactive service:
+\begin{enumerate}
+  \item Aggregate all file fragments into a global graph.
+  \item Maintain DCE results incrementally as files change.
+\end{enumerate}
+
+\section{Layer 1: Aggregating the distributed graph}
+Use a per-file \textbf{mapper} that turns a file into a fragment
+(\textsf{nodes}, \textsf{roots}, \textsf{edges}).
+Use a \textbf{reducer} to combine fragments into a global graph.
+
+State type: multisets of nodes, roots, edges:
+\[
+  G = (\mathsf{nodes} : \mathcal{M}(\mathsf{Node}),
+      \mathsf{roots} : \mathcal{M}(\mathsf{Node}),
+      \mathsf{edges} : \mathcal{M}(\mathsf{Node} \times \mathsf{Node}))
+\]
+
+Reducer:
+\[
+\begin{array}{lcl}
+\iota &=& (\emptyset,\emptyset,\emptyset) \\
+G \oplus f &=& (G.\mathsf{nodes} + f.\mathsf{nodes},\ G.\mathsf{roots} + f.\mathsf{roots},\ G.\mathsf{edges} + f.\mathsf{edges}) \\
+G \ominus f &=& (G.\mathsf{nodes} - f.\mathsf{nodes},\ G.\mathsf{roots} - f.\mathsf{roots},\ G.\mathsf{edges} - f.\mathsf{edges})
+\end{array}
+\]
+Because we use multisets, $(G \oplus f) \ominus f = G$ (``remove undoes add''). In the general reducer calculus (\texttt{reduce.tex}, \texttt{lean-formalisation/Reduce.lean}) a reducer is considered well-formed when \emph{both} of the following hold:
+\begin{itemize}
+  \item pairwise commutativity of the add/remove operations (order-independence of folding adds/removes);
+  \item an inverse law: removing a just-added fragment restores the prior state.
+\end{itemize}
+These algebraic properties are established abstractly in \texttt{reduce.tex}; in the DCE setting, they amount to the obvious commutativity/associativity of multiset union/subtraction and the cancellation law $(G \oplus f) \ominus f = G$.
+
+\section{Layer 2: Incremental DCE over the global graph}
+Given the aggregated graph $G$, define:
+\begin{itemize}
+  \item $E = $ deduped edges as a finite set of pairs.
+  \item $R = $ deduped roots.
+  \item $\mathsf{live} = $ nodes reachable from $R$ via $E$.
+  \item $\mathsf{dead} = G.\mathsf{nodes} \setminus \mathsf{live}$.
+\end{itemize}
+
+An incremental online algorithm (conceptual):
+\begin{itemize}
+  \item Maintain per-node \textbf{refcounts} of live in-edges:
+    $\mathsf{liveIn}(v) = |\{(u,v)\in E \mid u \in \mathsf{live}\}|$.
+  \item On \texttt{+} of a root, seed BFS and propagate liveness, bumping refcounts.
+  \item On \texttt{+} of an edge $(u,v)$:
+    if $u$ is live, increment $\mathsf{liveIn}(v)$; if it was zero, mark $v$ live and propagate.
+  \item On \texttt{-} of an edge $(u,v)$:
+    if $u$ is live, decrement $\mathsf{liveIn}(v)$; if it hits zero, $v$ may become dead and you recursively retire its outgoing edges.
+  \item On \texttt{+}/\texttt{-} of a node: add/remove its incident edges and refcount entry; if it is a root, treat as root add/remove.
+\end{itemize}
+The refcount discipline ensures $\ominus$ is the inverse of $\oplus$ for liveness when all incident updates are processed.
+If a refcount would go negative (e.g.\ inconsistent deletes), fall back to recomputing from scratch.
+
+\paragraph{Delta and complexity.}
+Let $\Delta$ be a change to the aggregated graph $G$ (a multiset of file deltas). The fragment reducer (Layer~1) processes $\Delta$ in $O(|\Delta|)$ work and produces an updated $G'$ where
+\[
+  G' = \begin{cases}
+    G \oplus \Delta & \text{if add} \\
+    G \ominus \Delta & \text{if remove.}
+  \end{cases}
+\]
+For Layer~2:
+\begin{itemize}
+  \item \texttt{+} root: touches only nodes reachable from that root along currently live edges; worst-case $O(|E|)$ but typically proportional to the reachable slice $\Delta_{\mathsf{live}}$.
+  \item \texttt{+} edge $(u,v)$: $O(1)$ if $u$ is dead or $v$ already live; otherwise marks $v$ live and propagates to $v$'s reachable slice.
+  \item \texttt{-} edge $(u,v)$: $O(1)$ if $u$ is dead or $\mathsf{liveIn}(v) > 1$; otherwise may cascade along the subgraph reachable from $v$ until nodes with alternate incoming live edges halt the cascade.
+  \item \texttt{+}/\texttt{-} node: reduce to adds/removes of its incident edges and root status.
+\end{itemize}
+Thus the reactive work is bounded by the size of the affected reachable component; in the worst case it is linear in $|E|$, but it is \emph{delta-bounded} to the portion of the graph whose liveness actually changes. The output delta (changes in live/dead sets) is similarly bounded by the size of that affected slice.
+
+\section{Incremental DCE Algorithm}
+
+The state maintained by Layer~2 consists of:
+\begin{itemize}
+  \item $\mathsf{live} \subseteq \mathsf{Node}$: the set of currently live nodes.
+  \item $\mathsf{refcount} : \mathsf{Node} \to \mathbb{N}$: for each node $v$, the count of incoming edges from live nodes.
+\end{itemize}
+
+\subsection{Adding a Fragment}
+
+When a fragment $f = (\mathsf{nodes}_f, \mathsf{roots}_f, \mathsf{edges}_f)$ is added:
+
+\begin{algorithm}[H]
+\caption{AddFragment($f$)}
+\begin{algorithmic}[1]
+\State \textbf{precondition:} $\mathsf{live} = \mathsf{liveSet}(G)$ and $\mathsf{refcount} = \mathsf{refcountSpec}(G)$
+\State $\mathsf{frontier} \gets \emptyset$
+\Comment{Nodes to propagate liveness from}
+\For{each $r \in \mathsf{roots}_f$}
+  \Comment{\textbf{inv:} $\mathsf{frontier}$ = processed new roots not yet live}
+  \If{$r \notin \mathsf{live}$}
+    \State $\mathsf{frontier} \gets \mathsf{frontier} \cup \{r\}$
+  \EndIf
+\EndFor
+\For{each $(u, v) \in \mathsf{edges}_f$}
+  \Comment{\textbf{inv:} refcounts updated for processed edges from live sources}
+  \If{$u \in \mathsf{live}$}
+    \State $\mathsf{refcount}[v] \gets \mathsf{refcount}[v] + 1$
+    \If{$v \notin \mathsf{live}$}
+      \State $\mathsf{frontier} \gets \mathsf{frontier} \cup \{v\}$
+    \EndIf
+  \EndIf
+\EndFor
+\State \Call{PropagateLiveness}{$\mathsf{frontier}$}
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{PropagateLiveness($\mathsf{frontier}$)}
+\begin{algorithmic}[1]
+\State $Q \gets \mathsf{frontier}$
+\Comment{BFS queue}
+\While{$Q \neq \emptyset$}
+  \Statex \Comment{\textbf{inv:} $\mathsf{live} \cup Q \supseteq$ nodes reachable from $\mathsf{frontier}$}
+  \Statex \Comment{\textbf{inv:} $\forall v \in \mathsf{live}.\; \mathsf{refcount}$ includes $v$'s outgoing edges}
+  \State $v \gets Q.\mathsf{dequeue}()$
+  \If{$v \notin \mathsf{live}$}
+    \State $\mathsf{live} \gets \mathsf{live} \cup \{v\}$
+    \For{each $(v, w) \in G.\mathsf{edges}$}
+    \Comment{All outgoing edges}
+      \State $\mathsf{refcount}[w] \gets \mathsf{refcount}[w] + 1$
+      \If{$w \notin \mathsf{live}$}
+        \State $Q.\mathsf{enqueue}(w)$
+      \EndIf
+    \EndFor
+  \EndIf
+\EndWhile
+\State \textbf{postcondition:} $\mathsf{live}$ includes closure of $\mathsf{frontier}$; refcounts updated
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Removing a Fragment}
+
+When a fragment $f$ is removed, we must handle cascading deaths:
+
+\begin{algorithm}[H]
+\caption{RemoveFragment($f$)}
+\begin{algorithmic}[1]
+\State \textbf{precondition:} $\mathsf{live} = \mathsf{liveSet}(G)$ and $\mathsf{refcount} = \mathsf{refcountSpec}(G)$
+\State $\mathsf{cascade} \gets \emptyset$
+\Comment{Nodes that may become dead}
+\For{each $(u, v) \in \mathsf{edges}_f$}
+  \Comment{\textbf{inv:} refcounts decremented for processed removed edges}
+  \If{$u \in \mathsf{live}$}
+    \State $\mathsf{refcount}[v] \gets \mathsf{refcount}[v] - 1$
+    \If{$\mathsf{refcount}[v] = 0 \land v \notin (G.\mathsf{roots} - \mathsf{roots}_f)$}
+      \State $\mathsf{cascade} \gets \mathsf{cascade} \cup \{v\}$
+    \EndIf
+  \EndIf
+\EndFor
+\For{each $r \in \mathsf{roots}_f$}
+  \Comment{\textbf{inv:} processed removed roots with refcount $0$ in cascade}
+  \If{$r \in \mathsf{live} \land r \notin (G.\mathsf{roots} - \mathsf{roots}_f)$}
+    \If{$\mathsf{refcount}[r] = 0$}
+      \State $\mathsf{cascade} \gets \mathsf{cascade} \cup \{r\}$
+    \EndIf
+  \EndIf
+\EndFor
+\State \Call{CascadeDeath}{$\mathsf{cascade}$}
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\caption{CascadeDeath($\mathsf{cascade}$)}
+\begin{algorithmic}[1]
+\State $Q \gets \mathsf{cascade}$
+\While{$Q \neq \emptyset$}
+  \Statex \Comment{\textbf{inv:} $\mathsf{live} \supseteq \mathsf{liveSet}(G')$ (live only shrinks toward spec)}
+  \Statex \Comment{\textbf{inv:} nodes in $Q$ have refcount $0$ and may need removal}
+  \Statex \Comment{\textbf{inv:} for removed nodes, successors' refcounts decremented}
+  \State $v \gets Q.\mathsf{dequeue}()$
+  \If{$v \in \mathsf{live} \land \mathsf{refcount}[v] = 0 \land v \notin G.\mathsf{roots}$}
+    \State $\mathsf{live} \gets \mathsf{live} \setminus \{v\}$
+    \For{each $(v, w) \in G.\mathsf{edges}$}
+    \Comment{Decrement successors}
+      \State $\mathsf{refcount}[w] \gets \mathsf{refcount}[w] - 1$
+      \If{$\mathsf{refcount}[w] = 0 \land w \notin G.\mathsf{roots}$}
+        \State $Q.\mathsf{enqueue}(w)$
+      \EndIf
+    \EndFor
+  \EndIf
+\EndWhile
+\State \textbf{postcondition:} all unreachable nodes removed from $\mathsf{live}$
+\end{algorithmic}
+\end{algorithm}
+
+\paragraph{Correctness invariant.}
+Let $G$ denote the current aggregated graph state (after Layer~1 applies the fragment delta).
+After each call to \textsc{AddFragment} or \textsc{RemoveFragment}, the algorithm state $(\mathsf{live}, \mathsf{refcount})$ should satisfy:
+\[
+  \mathsf{live} = \{v \mid v \text{ is reachable from } G.\mathsf{roots} \text{ via } G.\mathsf{edges}\}
+\]
+\[
+  \forall v.\; \mathsf{refcount}[v] = |\{(u,v) \in G.\mathsf{edges} \mid u \in \mathsf{live}\}|
+\]
+That is, the algorithm's $\mathsf{live}$ set equals the specification $\mathsf{liveSet}(G)$, and the refcount of each node equals the number of incoming edges from live nodes in the current graph.
+
+\paragraph{Relationship to the Lean formalization.}
+The Lean formalization (Section~\ref{sec:lean}) provides:
+\begin{enumerate}
+  \item \textbf{Specification}: Formal definitions of \texttt{liveSet} and \texttt{refcountSpec} that define what the correct answer is.
+  \item \textbf{Correctness theorem}: Any algorithm maintaining the invariant \texttt{refInvariant} produces the specification result (\texttt{runRefcount\_eq\_refSpec}).
+  \item \textbf{Characterization theorems}: Proven properties that \emph{describe} how liveness changes:
+    \begin{itemize}
+      \item \texttt{liveSet\_add\_as\_closure}: new live $=$ old live $\cup$ closure(frontier)
+      \item \texttt{liveSet\_remove\_as\_difference}: new live $=$ old live $\setminus$ newlyDead
+      \item \texttt{refcount\_zero\_iff\_no\_live\_incoming}: cascade triggers when refcount $= 0$
+    \end{itemize}
+  \item \textbf{Delta bounds}: Proven bounds on which nodes are affected.
+\end{enumerate}
+
+\paragraph{Gap: Algorithm vs.\ specification.}
+The Lean file does \emph{not} directly verify the pseudocode algorithms above.
+The concrete step function \texttt{refcountDeltaStep} in Lean simply recomputes $\mathsf{liveSet}(G')$ from scratch rather than implementing the incremental BFS/cascade logic.
+The characterization theorems provide strong \emph{guidance} that the algorithms are correct---they show that the new live set is exactly what BFS from the frontier would compute, and that cascade triggers exactly when refcount hits zero---but there is no machine-checked proof that the imperative loops implement this specification.
+
+To fully verify the algorithms, one would need to either: (a)~formalize the queue-based loops in Lean and prove loop invariants, or (b)~use a refinement approach connecting a functional algorithm to the specification.
+For practical purposes, the characterization theorems provide high confidence that a correct implementation of the pseudocode will satisfy the invariant.
+
+\paragraph{TODO.}
+Port the incremental BFS/cascade algorithm into the Lean step function (replacing \texttt{refcountDeltaStep}'s recomputation) and prove it preserves \texttt{refInvariant}.
+
+\section{Lean artefact}
+\label{sec:lean}
+The Lean file \texttt{lean-formalisation/DCE.lean} formalizes:
+
+\paragraph{Layer 1 (Graph aggregation).}
+\begin{itemize}
+  \item \texttt{Frag}, \texttt{GraphState}: multiset-based fragments and global state.
+  \item \texttt{addFrag}/\texttt{removeFrag}: the reducer operations.
+  \item \texttt{fragReducer} instantiates \texttt{Reducer} from \texttt{Reduce.lean}; \texttt{fragReducer\_wellFormed} proves the \texttt{WellFormedReducer} law (\texttt{remove} undoes \texttt{add} on any accumulated state), and \texttt{fragReducer\_pairwiseComm} shows pairwise commutativity of \texttt{addFrag}/\texttt{removeFrag}.
+  \item The general reducer calculus is documented in \texttt{reduce.tex} (and \texttt{lean-formalisation/Reduce.lean}); \texttt{DCE.lean} imports those definitions and instantiates them for fragments.
+\end{itemize}
+
+\paragraph{Layer 2 (Incremental DCE).}
+\begin{itemize}
+  \item \texttt{Reachable}: inductive definition of reachability from roots via edges.
+  \item \texttt{liveSet}, \texttt{deadSet}: specification of live/dead nodes.
+  \item \texttt{refcountSpec}: $\mathsf{liveIn}(v) = |\{(u,v) \in E \mid u \in \mathsf{live}\}|$.
+  \item \texttt{refInvariant}: correctness invariant $(\mathsf{live} = \mathsf{liveSet}(G) \land \mathsf{refcount} = \mathsf{refcountSpec}(G))$.
+  \item \texttt{RefcountAlg}: abstract interface for incremental algorithms with a \texttt{preserves} proof obligation.
+  \item \texttt{refcountDeltaStep}: concrete step function for processing fragment deltas.
+  \item \texttt{refcountDelta\_preserves}: proof that the step maintains \texttt{refInvariant}.
+  \item \texttt{runRefcount\_eq\_refSpec}: end-to-end correctness---any algorithm preserving the invariant produces the specification result after folding deltas.
+\end{itemize}
+
+\paragraph{BFS characterization for additions.}
+\begin{itemize}
+  \item \texttt{Reachable\_mono}: reachability is monotonic (adding edges/roots only expands liveness).
+  \item \texttt{liveSet\_mono\_addFrag}: adding a fragment can only expand the live set.
+  \item \texttt{initialFrontierAdd}: the BFS frontier consists of new roots and targets of new edges from live sources.
+  \item \texttt{liveSet\_add\_as\_closure}: \emph{proven} that $\mathsf{liveSet}(G') = \mathsf{liveSet}(G) \cup \mathsf{closure}(\mathsf{frontier})$, formalizing the ``\texttt{+} root'' and ``\texttt{+} edge'' rules from Section~3.
+\end{itemize}
+
+\paragraph{Cascade characterization for removals.}
+\begin{itemize}
+  \item \texttt{liveSet\_removeFrag\_subset}: removing a fragment can only shrink the live set (anti-monotonicity).
+  \item \texttt{newlyDead}: the set of nodes that become dead after removal (were live, now unreachable).
+  \item \texttt{liveSet\_remove\_as\_difference}: \emph{proven} that $\mathsf{liveSet}(G') = \mathsf{liveSet}(G) \setminus \mathsf{newlyDead}$.
+  \item \texttt{cascade\_single\_node}: if a node loses all live incoming edges and is not a remaining root, it becomes dead.
+  \item \texttt{cascade\_propagates}: dead nodes propagate: if $v$ becomes dead, nodes only reachable through $v$ also die.
+  \item \texttt{refcount\_zero\_iff\_no\_live\_incoming}: \emph{proven} that $\mathsf{refcount}(v) = 0$ iff $v$ has no incoming edges from still-live nodes, formalizing when the cascade triggers.
+\end{itemize}
+
+\paragraph{Complexity and delta bounds.}
+\begin{itemize}
+  \item \texttt{newlyLive}: the set of nodes that become live after adding (the ``add delta'').
+  \item \texttt{newlyDead}: the set of nodes that become dead after removing (the ``remove delta'').
+  \item \texttt{liveSet\_add\_eq\_union\_delta}: $\mathsf{liveSet}(G') = \mathsf{liveSet}(G) \cup \mathsf{newlyLive}$.
+  \item \texttt{liveSet\_remove\_eq\_diff\_delta}: $\mathsf{liveSet}(G') = \mathsf{liveSet}(G) \setminus \mathsf{newlyDead}$.
+  \item \texttt{newlyLive\_disjoint\_old}: the add delta is disjoint from the old live set.
+  \item \texttt{newlyDead\_subset\_old}: the remove delta is a subset of the old live set.
+  \item \texttt{add\_delta\_bound}: \emph{proven} that $\mathsf{newlyLive} \subseteq \mathsf{closure}(\mathsf{frontier})$, bounding work by the frontier's reachable set.
+  \item \texttt{outside\_delta\_unchanged}: \emph{proven} that nodes outside the delta have unchanged liveness.
+  \item \texttt{totalDelta}: unified characterization of changed nodes for both add and remove.
+  \item \texttt{directlyAffected}, \texttt{potentiallyDead}: characterization of nodes that may be affected by a removal; \texttt{potentiallyDead} is defined as nodes reachable from directly affected nodes.
+  \item \texttt{remove\_delta\_bound}: \emph{proven} that $\mathsf{newlyDead} \subseteq \mathsf{potentiallyDead}$, bounding the remove cascade.
+  \item \texttt{refcount\_change\_bound}: \emph{proven} that refcounts only change for nodes with edges from the delta or edges in the fragment, enabling efficient incremental updates.
+\end{itemize}
+
+These lemmas formalize that the reactive work is \emph{delta-bounded}: only nodes in the delta (and their neighbors for refcount updates) require processing. The frontier for add consists of $O(|f.\mathsf{roots}| + |f.\mathsf{edges}|)$ nodes, and the reachable set from the frontier bounds the actual work. All proofs are complete with no remaining \texttt{sorry}s in the Lean formalization.
+
+\section{Toward a Skip service}
+A realistic Skip service can be structured in two layers of resources:
+\begin{enumerate}
+  \item \textbf{Aggregated graph resource} (Layer~1): an input collection of file fragments
+    \texttt{files : File $\times$ Frag} mapped directly to a reducer \texttt{fragReducer}
+    (multiset union). This yields a single resource \texttt{graph : Unit $\to$ GraphState}
+    containing the multisets of all nodes/roots/edges.
+  \item \textbf{DCE resource} (Layer~2): a custom compute resource that subscribes to
+    \texttt{graph} updates and maintains internal state \texttt{(live, refcount)}.
+    On each graph delta, it runs the incremental refcount algorithm (add/remove roots/edges,
+    propagate liveness, cascade deletions) and emits two derived collections:
+    \texttt{live : Unit $\to$ Set Node} and \texttt{dead : Unit $\to$ Set Node}.
+\end{enumerate}
+
+In the Skip bindings, Layer~1 is a standard \texttt{EagerCollection.reduce} with a well-formed reducer
+(\texttt{addFrag}/\texttt{removeFrag}). Layer~2 is not a pure reducer; it is best implemented
+as a \texttt{LazyCompute} or service module that:
+\begin{itemize}
+  \item subscribes to the \texttt{graph} resource;
+  \item keeps a refcount map and a live set in memory;
+  \item applies the delta-handling rules from Section~2 (refcount bumps/drops, reachability propagation);
+  \item publishes live/dead as derived resources.
+\end{itemize}
+This preserves the algebraic guarantees where they apply (Layer~1) while accommodating the global,
+graph-shaped logic of DCE in a custom reactive compute node (Layer~2).
+
+\end{document}
