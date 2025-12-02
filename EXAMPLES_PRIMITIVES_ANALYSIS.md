@@ -1425,6 +1425,96 @@ let regionTotals = orderContrib
 
 **Primitives needed:** `map`, `reduce` (sum), context lookup for join
 
+#### DBToaster's higher-order delta processing in Skip (sketch)
+
+The [DBToaster system](http://vldb.org/pvldb/vol5/p968_yanifahmad_vldb2012.pdf) (VLDB 2012) introduced *viewlet transforms*: a technique that recursively materializes higher-order delta views to achieve efficient incremental maintenance. The key insight is that delta queries (how a view changes when base data changes) can themselves be materialized and maintained incrementally.
+
+This subsection sketches how a few canonical DBToaster examples can be expressed with current Skip primitives. It is meant as evidence that the **patterns** are compatible, not as a full equivalence result between DBToaster's formal calculus and the Skip runtime.
+
+**DBToaster's canonical example: `count(R × S)`**
+
+Instead of recomputing the product on each update, DBToaster materializes:
+- `Q = |R| × |S|` (0th order — the query result)
+- `ΔR Q = |S|` (1st order — delta when one tuple is added to R)
+- `ΔS Q = |R|` (1st order — delta when one tuple is added to S)
+- `ΔR(ΔS Q) = 1` (2nd order — constant, independent of data)
+
+Update rule: When a tuple is inserted into R, compute `Q_new = Q_old + |S|` using only *addition*.
+
+**Skip equivalent using current primitives:**
+
+```rescript
+// Materialize counts (analogous to DBToaster's 1st-order delta views)
+let countR = r->reduce(countReducer)  // EagerCollection with single entry ("total", |R|)
+let countS = s->reduce(countReducer)  // EagerCollection with single entry ("total", |S|)
+
+// Compute product with reactive dependency on both counts
+let product = countR->map(("total", rCount, _ctx) => {
+  let sCount = countS->getUnique("total")
+  ("result", rCount * sCount)
+})
+```
+
+**How Skip achieves O(1) updates:**
+- **R insert:** `countR` reducer updates incrementally (adds 1) → `product` mapper re-runs once → O(1)
+- **S insert:** `countS` updates → reactive dependency triggers `product` re-run → O(1)
+
+**Skip primitives used:**
+- `reduce` with `countReducer` — maintains aggregate incrementally
+- `map` with `getUnique` lookup — creates reactive dependency on `countS`
+- Reactive dependency graph — automatically propagates changes
+
+**More complex example: `sum(R.a * S.b)` over join `R(a, key) ⋈ S(key, b)`**
+
+DBToaster maintains per-key partial aggregates and composes them:
+
+```rescript
+// Per-key partial sums (DBToaster's "delta views")
+let sumAByKey = r->reduce(sumReducer)  // key → Σ{a | (a, key) ∈ R}
+let sumBByKey = s->reduce(sumReducer)  // key → Σ{b | (key, b) ∈ S}
+
+// Per-key contribution to result
+let contributions = sumAByKey->map((key, sumA, _ctx) => {
+  let sumB = sumBByKey->get(key)->Option.getOr(0)
+  ("result", sumA * sumB)
+})
+
+// Final aggregation
+let result = contributions->reduce(sumReducer)
+```
+
+**Update complexity analysis:**
+- R adds `(a₀, k₀)`: `sumAByKey[k₀]` updates (O(1)) → only mapper for `k₀` re-runs (O(1)) → `result` reducer updates (O(1))
+- S adds `(k₀, b₀)`: `sumBByKey[k₀]` updates → reactive dependency triggers re-run of mapper for keys that looked up `k₀` → O(1) per affected key
+
+**Comparison: DBToaster vs Skip**
+
+| DBToaster Concept | Skip Primitive | Mechanism |
+|-------------------|----------------|-----------|
+| Materialized aggregate view | `reduce` | Incremental reducer maintains running total |
+| 1st-order delta (ΔR Q) | Reactive `map` | Mapper re-runs when input key changes |
+| Higher-order delta (Δ²Q) | Reducer incrementality | Reducer's `add`/`remove` handle deltas directly |
+| Delta propagation | Reactive dependencies | `getUnique`/`getArray` lookups create dependencies |
+| Ring operations (F-IVM) | Custom reducer | User-defined `add`/`remove` over ring structure |
+
+**What Skip handles well:**
+- Standard SQL aggregation queries (SUM, COUNT, AVG over joins)
+- Incremental aggregate maintenance via reducers
+- Join maintenance via reactive lookups
+
+**Potential limitations vs DBToaster (current status):**
+- **Scope of examples:** We only analyze simple join+aggregate patterns (`count(R×S)`, `sum(R.a * S.b)` and close relatives). We do **not** yet handle the full DBToaster query fragment (nested queries, longer join chains, complex polynomials, etc.).
+- **Compile-time vs runtime optimization:** DBToaster derives delta expressions symbolically and simplifies them (e.g., recognizing `Δ²Q = constant`). Skip relies on runtime reactivity; it is plausible but unproven that the runtime always realizes the same bounded per-update work for a suitably defined fragment.
+- **Complex polynomial factoring:** DBToaster can factor common subexpressions across delta levels; Skip requires manual structuring of factorized state as explicit collections and reducers.
+- **Deletes and mixed updates:** The sketches above implicitly assume insert-only workloads. Handling deletes and mixed update patterns with the same asymptotic guarantees requires a more careful treatment of reducer `remove` and dependency invalidation.
+
+**Takeaway and future work:** For the specific patterns above, we can realize the same state structure and per-update work as the corresponding DBToaster view programs using `reduce` + reactive `map` + lookups. Extending this to:
+- a precisely defined DBToaster/F-IVM-style query fragment,
+- a mechanical translation into Skip graphs, and
+- a proof (or counterexamples) that Skip matches the claimed asymptotic update complexity for that fragment
+
+is left as future work.
+
 ---
 
 ### Example 6.2: F-IVM-style ring-based analytics
