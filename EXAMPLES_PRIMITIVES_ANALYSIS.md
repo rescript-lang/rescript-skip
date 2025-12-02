@@ -1435,7 +1435,7 @@ Same as sum reducer, but over a ring (could be numbers, polynomials, etc.).
 ---
 
 ### Example 6.3: Dynamic acyclic join (Yannakakis)
-**Classification: 🟢 Structural (map with lookups) — SIMPLER THAN EXPECTED**
+**Classification: 🟢 Structural (map with lookups)**
 
 ```
 Input:  R : A × B          // Relation R(A, B)
@@ -1444,178 +1444,92 @@ Input:  R : A × B          // Relation R(A, B)
 Output: Q : (A,B,C,D) × Unit  // Join result Q = R ⋈ S ⋈ T
 ```
 
-#### Requirements Analysis
+#### Yannakakis-style optimal algorithm (batch view)
 
-An acyclic join is one where the join graph (relations as hyperedges, attributes as nodes) forms a tree. The Yannakakis algorithm exploits this structure for efficient processing:
-1. **Semi-join reduction**: Filter each relation to only tuples that will participate in the join
-2. **Join enumeration**: Enumerate results by traversing the join tree
+An acyclic join is one where the hypergraph of relations (relations as hyperedges, attributes as nodes) forms a tree. For the chain
 
-For incremental maintenance:
-- When R changes, recompute affected portions of the join
-- When S changes, both R-side and T-side may be affected
-
-#### Why Skip's Reactivity Helps
-
-Skip automatically propagates changes through the computation graph. If we express the join correctly, Skip handles delta propagation.
-
-**Key insight**: A join can be expressed as a series of `map` operations with **context lookups**.
-
-#### Solution 1: Cascaded Maps with Lookups — SIMPLEST
-
-For a chain join R(A,B) ⋈ S(B,C) ⋈ T(C,D):
-
-```rescript
-// Step 1: Index each relation by join attributes
-let rByB = r->map((a, b) => (b, a))           // B → A
-let sByB = s                                    // Already keyed by B
-let sByC = s->map((b, c) => (c, b))           // C → B
-let tByC = t                                    // Already keyed by C
-
-// Step 2: Join R ⋈ S by looking up S entries for each R entry's B value
-let rJoinS = r->map((a, b, ctx) => {
-  let cs = sByB->getArray(b)  // All C values where S(b, c)
-  cs->Array.map(c => ((a, b, c), ()))
-})
-
-// Step 3: Join (R ⋈ S) ⋈ T by looking up T entries for each C value
-let rJoinSJoinT = rJoinS->map(((a, b, c), _, ctx) => {
-  let ds = tByC->getArray(c)  // All D values where T(c, d)
-  ds->Array.map(d => ((a, b, c, d), ()))
-})
+```
+R(A,B) ⋈ S(B,C) ⋈ T(C,D)
 ```
 
-**How Skip handles updates:**
-- When a tuple `(a₀, b₀)` is added to R:
-  - `rByB` adds entry `(b₀, a₀)`
-  - `rJoinS` mapper runs for `(a₀, b₀)`, producing join tuples
-  - `rJoinSJoinT` mapper runs for each new tuple, producing final results
+the Yannakakis algorithm proceeds in two phases:
 
-- When a tuple `(b₀, c₀)` is added to S:
-  - `sByB` and `sByC` update
-  - **Critical**: Which R tuples need re-evaluation?
-  
-**The issue**: Skip's `map` operation re-evaluates when the **input entry** changes, but not when a **context lookup** changes.
+1. **Semi-join reduction (bottom‑up and top‑down):**
+   - Bottom‑up:
+     - Replace `S` by `S ⋉ T` (keep only tuples in `S` whose `C` appears in `T`)
+     - Replace `R` by `R ⋉ S` (keep only tuples in `R` whose `B` appears in the reduced `S`)
+   - Top‑down:
+     - Optionally further prune `S` and `T` using reduced `R` (for deeper trees).
 
-#### Solution 2: Join as Merge + Filter
+   After this phase, every tuple in `R`, `S`, and `T` participates in **at least one** final join result—no dead tuples remain.
 
-Model the join differently: emit candidate tuples and filter:
+2. **Join enumeration (top‑down):**
+   - Traverse the join tree, e.g. from `R` outward:
+     - For each `(a,b) ∈ R`, enumerate `c` such that `(b,c) ∈ S`, then `d` such that `(c,d) ∈ T`.
 
-```rescript
-// Emit all (a, b) pairs from R, tagged
-let rTuples = r->map((a, b) => ((b, "R"), (a, b, null, null)))
+For acyclic joins, Yannakakis achieves **worst‑case optimal** complexity
 
-// Emit all (b, c) pairs from S, tagged
-let sTuples = s->map((b, c) => ((b, "S"), (null, b, c, null)))
-
-// Merge and group by B
-let byB = rTuples->merge([sTuples])
-
-// For each B, compute cross product of R and S tuples
-let rJoinS = byB->reduce(joinReducer)  // Custom reducer that joins
+```
+O(|R| + |S| + |T| + |Q|)
 ```
 
-This is getting complex. Let's think more carefully.
+where `Q` is the output, by ensuring that semi‑join reduction never materializes intermediate results larger than the final join.
 
-#### Solution 3: Bidirectional Propagation with Indices
+#### Idiomatic Skip solution: driver relation + indexed lookups
 
-For proper incremental join maintenance, we need to propagate changes in **both directions**:
-- R change → affects join via R's B values
-- S change → affects join via S's B and C values
-- T change → affects join via T's C values
+Skip does not (today) expose Yannakakis’ semi‑join phases as primitives. The idiomatic pattern is:
 
-**Implementation with explicit indices:**
+- pick one relation as a **driver** (often the smallest or most selective), and
+- perform indexed lookups into the other relations via `getArray` inside a `map`.
+
+Assuming we have eager collections:
+
+- `r : (A,B) → unit`
+- `sByB : B → C` (index of `S` on `B`)
+- `tByC : C → D` (index of `T` on `C`)
+
+we can express the join as:
+
 ```rescript
-// Index collections
-let rByB: Collection<B, A> = r->map((a, b) => (b, a))
-let sByB: Collection<B, C> = s  // Original keying
-let sByC: Collection<C, B> = s->map((b, c) => (c, b))
-let tByC: Collection<C, D> = t  // Original keying
-
-// Join from R's perspective: for each (a, b) in R, find matching S and T
-let joinFromR = r->map((a, b, ctx) => {
-  let sMatches = sByB->getArray(b)  // C values
-  sMatches->Array.flatMap(c => {
-    let tMatches = tByC->getArray(c)  // D values
-    tMatches->Array.map(d => ((a, b, c, d), ()))
+// Driver-on-R nested-loop join with index lookups into S and T.
+let joinResult =
+  r->map((a, b, _ctx) => {
+    let cs = sByB->getArray(b)         // all c with S(b,c)
+    cs->Array.flatMap(c => {
+      let ds = tByC->getArray(c)       // all d with T(c,d)
+      ds->Array.map(d => ((a, b, c, d), ()))
+    })
   })
-})
-
-// Join from S's perspective: for each (b, c) in S, find matching R and T
-let joinFromS = s->map((b, c, ctx) => {
-  let rMatches = rByB->getArray(b)  // A values
-  let tMatches = tByC->getArray(c)  // D values
-  rMatches->Array.flatMap(a => {
-    tMatches->Array.map(d => ((a, b, c, d), ()))
-  })
-})
-
-// Join from T's perspective: for each (c, d) in T, find matching S and R
-let joinFromT = t->map((c, d, ctx) => {
-  let sMatches = sByC->getArray(c)  // B values
-  sMatches->Array.flatMap(b => {
-    let rMatches = rByB->getArray(b)  // A values
-    rMatches->Array.map(a => ((a, b, c, d), ()))
-  })
-})
-
-// Merge all perspectives (each join tuple appears once from each contributing relation)
-// Then deduplicate by using the join tuple as key
-let joinResult = joinFromR->merge([joinFromS, joinFromT])
-// Each tuple (a,b,c,d) appears 3 times (once per base relation)
-// The reducer deduplicates by counting contributions
-
-let deduped = joinResult->reduce(countReducer)->map(((key, count), _) => 
-  if count == 3 { [(key, ())] } else { [] }  // Only emit if all 3 contribute
-)
 ```
 
-**Wait, this is wrong.** A join tuple should appear once, not require 3 contributors.
+In Skip’s execution model, `getArray` used in a mapper like this creates **reactive dependencies** on `sByB` and `tByC` in addition to the direct dependency on `r`. Intuitively:
 
-#### Solution 4: Single-Source Join + Reactive Dependencies
+- changes to `R` trigger recomputation of only the affected driver tuples; and
+- changes to `S` or `T` at keys looked up during previous runs cause the relevant driver tuples to be re‑evaluated.
 
-The simplest correct approach for Skip:
+This realizes a dynamic, **incremental** nested‑loop join: updates to any of `R`, `S`, or `T` only recompute the pieces of `Q` that actually depend on the updated tuples.
 
-```rescript
-// Pick one relation as the "driver" (usually the smallest or most selective)
-// For each tuple in the driver, look up matches in other relations
+#### Why this is not Yannakakis‑optimal
 
-let joinResult = r->map((a, b, ctx) => {
-  // Look up S tuples with this B
-  let sMatches = s->getArray(b)  // This creates a reactive dependency!
-  
-  sMatches->Array.flatMap(c => {
-    // Look up T tuples with this C
-    let tMatches = t->getArray(c)  // Another reactive dependency!
-    
-    tMatches->Array.map(d => ((a, b, c, d), ()))
-  })
-})
-```
+The Skip pattern above is **semantically correct**—it computes exactly `R ⋈ S ⋈ T` and maintains it incrementally—but it does **not** implement Yannakakis’ asymptotically optimal algorithm:
 
-**Key question**: Does `s->getArray(b)` inside a mapper create a reactive dependency?
+- **No global semi‑join pruning.**
+  - Yannakakis performs global semi‑join reduction before any enumeration, guaranteeing that each base relation contains only tuples that appear in the output.
+  - The Skip join enumerates from the full (possibly unpruned) `R`, and only *locally* skips when `sByB->getArray(b)` or `tByC->getArray(c)` are empty.
 
-In Skip's model, **yes** — the mapper's output depends on both the input entry AND the collections it reads. When S changes at key b, all R entries with that b should re-evaluate.
+- **Complexity characteristics.**
+  - Yannakakis: `O(|R| + |S| + |T| + |Q|)` worst‑case for acyclic joins.
+  - Skip pattern: behaves like an **indexed nested‑loop join** driven by `R`. With reasonable indexes, each output tuple is still produced in `O(1)` amortized time, but:
+    - if `R` is much larger than the reduced `R ⋉ S ⋉ T`, we still pay a cost proportional to the size of the *unreduced* `R`;
+    - there is no global guarantee matching Yannakakis’s tight worst‑case bound.
 
-**This is the Skip idiom for joins.**
+- **Incremental vs batch focus.**
+  - Yannakakis is a **batch** algorithm optimized for one‑shot evaluation.
+  - The Skip idiom is optimized for **incremental maintenance** under small updates, leaning on reactivity and indices rather than a global semi‑join phase.
 
-#### Verdict
-
-**Joins in Skip are expressed as `map` with context lookups.** The runtime handles reactive propagation.
-
-For an acyclic join R ⋈ S ⋈ T:
-```rescript
-let joinResult = r->map((a, b, ctx) => {
-  s->getArray(b)->Array.flatMap(c =>
-    t->getArray(c)->Array.map(d =>
-      ((a, b, c, d), ())
-    )
-  )
-})
-```
-
-**Classification revised: 🟢 Structural** — just `map` with lookups.
-
-**Primitives needed:** `map` with collection lookups (reactive dependencies)
+In summary:
+- use Yannakakis to reason about optimality for acyclic joins in the abstract;  
+- in Skip, the practical pattern is “driver relation + reactive indexed lookups via `map`”, which is structurally simple and incrementally efficient, but not Yannakakis‑optimal in the classical worst‑case sense.
 
 ---
 
@@ -2280,4 +2194,3 @@ Only use `lazyCompute`/`fixpoint` when:
 4. **Design fixpoint semantics** for recursive queries (Tier 5)
 5. **Document the Skip idiom** for temporal concerns (external + reactive)
 6. **Implement example services** using only Tier 1-4 to validate expressiveness
-
