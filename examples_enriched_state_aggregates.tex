@@ -1,0 +1,57 @@
+% Enriched-state per-key views (composite accumulators)
+\begin{example}[Average rating per item (Skip conceptual service)]
+Input collection \texttt{ratings : ItemId $\times$ Rating}, where \texttt{Rating} has a numeric field \texttt{score}.
+Define a reducer with accumulator state \texttt{(sum : float, count : int)} per \texttt{ItemId}; on add of a rating with score~$s$, update to \texttt{(sum + s, count + 1)}, and on remove update to \texttt{(sum - s, count - 1)} when \texttt{count > 1}, or signal fallback when \texttt{count = 1}.
+Expose a derived view \texttt{avgRating : ItemId $\to$ float} that maps each accumulator to \texttt{sum / count} when \texttt{count > 0}.
+\end{example}
+
+\begin{example}[Histogram / frequency distribution per key (Skip conceptual service)]
+Input collection \texttt{events : KeyId $\times$ Value}, with a fixed bucketization function \texttt{bucket : Value $\to$ BucketId}.
+Define an accumulator \texttt{hist : BucketId $\to$ int} for each \texttt{KeyId}; on add of value \texttt{v}, increment \texttt{hist[bucket(v)]}, and on remove decrement \texttt{hist[bucket(v)]}, deleting buckets whose count drops to zero.
+The exposed resource \texttt{histograms : KeyId $\to$ Map<BucketId, int>} provides per-key histograms suitable for dashboards (e.g.\ distribution of response times or purchase amounts).
+\end{example}
+
+\begin{example}[Distinct count with reference counts (Skip conceptual service)]
+Input collection \texttt{events : KeyId $\times$ Value}.
+Define accumulator state \texttt{freq : Value $\to$ int} per key; on add of value \texttt{v}, set \texttt{freq[v] := freq[v] + 1} (defaulting from zero), and on remove set \texttt{freq[v] := freq[v] - 1}, deleting entries whose frequency becomes zero.
+The view \texttt{distinctCount : KeyId $\to$ int} returns, for each key, the number of entries in \texttt{freq} (i.e.\ values with positive frequency), giving an exact per-key distinct count that supports removals.
+\end{example}
+
+\begin{example}[Weighted average per key (Flink-style UDAF as Skip service)]
+Input collection \texttt{measurements : KeyId $\times$ (value : float, weight : float)}.
+For each key, use accumulator \texttt{(sumWeights : float, sumWeightedValues : float)}; on add of \texttt{(v,w)}, update to \texttt{(sumWeights + w, sumWeightedValues + w * v)}, and on remove update to \texttt{(sumWeights - w, sumWeightedValues - w * v)} when valid, otherwise fall back.
+Expose a view \texttt{weightedAvg : KeyId $\to$ float} defined as \texttt{sumWeightedValues / sumWeights} when \texttt{sumWeights > 0}.
+\end{example}
+
+\begin{example}[Top-2 / Top-K per group (Flink \& Materialize-inspired service)]
+Input collection \texttt{scores : GroupId $\times$ (itemId : Id, score : float)}.
+Per group, maintain accumulator state as a bounded ordered list of up to $K$ pairs \texttt{(itemId, score)}, sorted descending by score.
+On add, insert the new pair into the list (evicting the lowest-scoring element if the list exceeds length~$K$); on remove, if the removed item is in the list, delete it and optionally track enough extra candidates (e.g.\ store the top $K{+}M$) or trigger recompute for that group.
+Expose a resource \texttt{topK : GroupId $\to$ array<(Id, float)>} that returns the current top-K items per group.
+\end{example}
+
+\begin{example}[Top-N ranking per key (Skip conceptual)]
+Generalizing the Top-K pattern, define a service over \texttt{metrics : KeyId $\times$ (entityId : Id, score : float)}.
+For each \texttt{KeyId}, maintain a sorted data structure (e.g.\ a bounded heap or balanced tree) of the top $N$ \texttt{(entityId, score)} entries.
+Add operations insert or update entries based on score; remove operations delete entries when they are present, and may trigger a recompute of the per-key top-$N$ if the removed entity was not tracked.
+The exported resource \texttt{topN : KeyId $\to$ array<(Id, float)>} provides a ranked list per key.
+\end{example}
+
+\begin{example}[Approximate distinct count with HLL (Flink, Beam, Materialize-inspired service)]
+Input collection \texttt{events : KeyId $\times$ UserId}.
+Per key, the accumulator is a HyperLogLog sketch \texttt{hll}, initialized empty; on add of user \texttt{u}, apply the HLL update algorithm to incorporate \texttt{u}, and on remove either ignore (append-only approximation) or use a more advanced HLL variant if available.
+The view \texttt{approxDistinct : KeyId $\to$ int} estimates the number of distinct users per key using the HLL cardinality estimate.
+\end{example}
+
+\begin{example}[Sliding-window averages with sum \& count (Kafka Streams, Spark-inspired)]
+Input collection \texttt{readings : (SensorId, WindowId) $\times$ float}, where the \texttt{WindowId} encodes a time bucket or window key.
+For each \texttt{(SensorId, WindowId)} pair, maintain accumulator \texttt{(sum : float, count : int)} updated on add/remove as in the average-rating example.
+The resource \texttt{windowAvg : (SensorId, WindowId) $\to$ float} reports per-sensor averages for each active window, leaving window management (creating and retiring \texttt{WindowId}s) to separate logic.
+\end{example}
+
+\begin{example}[Enriched min/max with secondary state (Skip conceptual)]
+Input collection \texttt{values : KeyId $\times$ Value}.
+For each key, accumulator state extends a simple extremum with secondary information, for example \texttt{(min : Value, secondMin : Value, countMin : int)}.
+On add of \texttt{v}, update the triple appropriately (updating \texttt{min}, \texttt{secondMin}, and \texttt{countMin}); on remove of \texttt{v}, decrement \texttt{countMin} if \texttt{v = min} and, when \texttt{countMin} reaches zero, promote \texttt{secondMin} or trigger recomputation.
+The exposed view \texttt{minPerKey : KeyId $\to$ Value} returns the current minimum, benefiting from the enriched state to avoid full recomputation in many removal scenarios.
+\end{example}

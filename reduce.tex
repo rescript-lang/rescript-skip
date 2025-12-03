@@ -249,6 +249,10 @@ A reducer $R = (\iota, \oplus, \ominus)$ is \emph{well-formed} if $\ominus$ is t
 \]
 \end{definition}
 
+\begin{remark}[Asymmetric inverse law]
+Well-formedness requires the ``add then remove'' property $(a \oplus v) \ominus v = a$, which ensures that when incremental updates first remove contributions and then add new ones, the result is correct. The reverse law $(a \ominus v) \oplus v = a$ is not guaranteed without extra hypotheses (e.g.\ cancellativity); requiring only the asymmetric law keeps the definition broad enough to cover partial monoids and multiset subtraction.
+\end{remark}
+
 \begin{example}[Interpreting well-formedness for sum]
 For $R_{\mathsf{sum}}$ and any multiset $M$ of purchase amounts and value $v \in \mathbb{Z}$, well-formedness says that if we start from the total spend $\mathsf{fold}_\oplus(0, M)$, then adding a purchase of amount $v$ and immediately removing it leaves the total unchanged:
 \[
@@ -319,6 +323,22 @@ C \bullet \Delta = \lambda k.\, (C(k) \setminus \Delta^-(k)) \uplus \Delta^+(k)
 \]
 Intuitively, $C \bullet \Delta$ is the collection obtained by first removing all values in $\Delta^-$ from $C$ and then adding all values in $\Delta^+$.
 \end{definition}
+
+\begin{remark}[Why remove then add?]
+The order here mirrors how the incremental update function works: we take the \emph{existing} accumulation, subtract contributions that are no longer present, and then fold in new contributions. This ensures that deletions target only previously present elements; additions are layered on top of that cleaned state. The following example demonstrates why this order matters when $\Delta^+$ and $\Delta^-$ overlap.
+\end{remark}
+
+\begin{example}[Order matters when $\Delta^+$ and $\Delta^-$ overlap]
+Let $C(k) = \{a\}$, and suppose $\Delta^-(k) = \{a\}$ (remove the old $a$) and $\Delta^+(k) = \{a,b\}$ (add back $a$ and a new $b$). The intended result is $C'(k) = \{a,b\}$: we remove the old $a$ and then add the new multiset. With the remove-then-add definition, we get
+\[
+ (C(k) \setminus \{a\}) \uplus \{a,b\} = \varnothing \uplus \{a,b\} = \{a,b\}.
+\]
+While with multisets both orders may yield the same result, the remove-then-add order is essential when working with sets (where union is $\cup$ and difference is $\setminus$). If we used add-then-remove with sets, we would compute
+\[
+ (C(k) \cup \{a,b\}) \setminus \{a\} = \{a,b\} \setminus \{a\} = \{b\},
+\]
+which incorrectly removes the newly added $a$ from $\Delta^+(k)$, giving $\{b\}$ instead of the intended $\{a,b\}$. The remove-then-add order ensures that deletions target only elements that existed in $C(k)$, and additions are applied to the cleaned state.
+\end{example}
 
 \begin{example}[Changing a user's purchases]
 For key $k = \mathit{user1}$ in the purchase collection $C$, suppose we remove one \$30 purchase and add a new \$20 purchase.

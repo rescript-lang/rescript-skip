@@ -1,0 +1,21 @@
+You are a deep research assistant.
+Assume you have access to the outputs of several prior tasks (Skip examples, streaming/windowed analytics, FRP/UI, incremental DB/graph examples).
+Goal: synthesize a high-level expressivity coverage matrix for a Skip-style reactive calculus.
+
+1. Group all collected examples into families:
+   - Simple per-key aggregates (sum, count, avg, min/max),
+   - Enriched-state aggregates (average with (sum,count), histograms, multi-field metrics),
+   - Windowed/session-based aggregates,
+   - Graph/relational aggregates,
+   - Business metrics and UI/state patterns.
+2. For each family, estimate:
+   - Fraction of examples that are naturally expressible as well-formed per-key reducers with plausible inverse operations (possibly with richer state).
+   - Fraction that are expressible only as partial reducers with fallback-to-recompute.
+   - Fraction that require different combinators altogether (for example, window operators or holistic algorithms).
+3. Output:
+   - A concise matrix or table showing these families and coverage estimates.
+   - 3–5 key observations about where a reactive calculus for Skip should focus:
+     - Which reducer patterns to prioritize as well-formed by construction,
+     - Which patterns to explicitly leave as partial/fallback,
+     - Which areas suggest the need for new combinators beyond reducers.
+

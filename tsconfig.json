@@ -9,5 +9,5 @@
     "resolveJsonModule": true,
     "noEmitOnError": true
   },
-  "include": ["examples/LiveHarnessService.ts", "examples/LiveService.ts"]
+  "include": ["examples/*.ts"]
 }

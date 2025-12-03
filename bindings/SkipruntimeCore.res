@@ -1,4 +1,19 @@
-/** Dependency-safe JSON value that can be tracked by the runtime. */
+/** Dependency-safe JSON value that can be tracked by the runtime.
+ *
+ * In ReScript, `JSON.t` is a full JSON algebraic data type:
+ * - `Null`, `Bool`, `Number`, `String`,
+ * - `Array` of `JSON.t`,
+ * - `Object` mapping string keys to `JSON.t`.
+ *
+ * At the Skip runtime boundary, `JSON.t` values are marshalled to the
+ * engine's internal JSON representation and back. The Skip runtime defines
+ * a total order on JSON keys: `null < booleans < numbers < strings < arrays < objects`,
+ * with structural/lexicographic comparison within each type.
+ *
+ * **Known issue (to be fixed):** The current WASM binding serializes booleans
+ * as numbers (0/1) when exporting to JavaScript. This does not affect the
+ * runtime's internal ordering or key identity—only the JS representation.
+ */
 type depSafe = JSON.t
 
 /** Opaque type used as a measure of abstract time in reactive subscriptions. */
@@ -181,13 +196,27 @@ module EagerCollection = {
     array<depSafe>,
   ) => t<'k2, 'a> = "mapReduce"
 
-  /** Keep only elements whose keys are in the given range. */
+  /** Keep only elements whose keys are in the given range.
+    *
+    * Note: key ranges are interpreted using the Skip JSON ordering,
+    * not JavaScript's `<` or insertion order. Concretely:
+    * - the runtime orders keys by JSON *type* first (null, booleans, numbers,
+    *   strings, arrays, objects), and
+    * - within each type uses a structural / lexicographic order (numbers by
+    *   numeric value, strings lexicographically, arrays/objects by elements
+    *   / key–value pairs).
+    *
+    * This means that slicing by `start`/`end` is stable and total over JSON
+    * keys, but may differ from naive JS comparisons on raw values or on
+    * `JSON.stringify` strings.
+    */
   @send external slice: (t<'k, 'v>, 'k, 'k) => t<'k, 'v> = "slice"
 
-  /** Keep only elements whose keys are in at least one of the given ranges. */
+  /** Keep only elements whose keys are in at least one of the given ranges.
+    * Ranges are interpreted with the same Skip JSON ordering as `slice`. */
   @send external slices: (t<'k, 'v>, array<('k, 'k)>) => t<'k, 'v> = "slices"
 
-  /** Keep the first n entries. */
+  /** Keep the first n entries in the Skip JSON key ordering (see `slice`). */
   @send external take: (t<'k, 'v>, int) => t<'k, 'v> = "take"
 
   /** Combine collections, associating with each key all values from any input. */

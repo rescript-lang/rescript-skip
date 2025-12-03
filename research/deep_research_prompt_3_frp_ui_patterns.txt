@@ -1,0 +1,21 @@
+You are a deep research assistant.
+Goal: find FRP and reactive UI patterns that involve aggregations or maintained summaries, to see which should be expressible via Skip-style collections and reducers.
+
+1. Look at:
+   - Classic FRP libraries (Fran, Yampa, Reactive Banana),
+   - Elm and Elm-inspired architectures,
+   - React / Redux and modern UI frameworks (React, Vue, Svelte, Solid) where state is maintained via reducers or accumulators.
+2. Collect examples where state is:
+   - A running total or counter,
+   - A rolling window or recent history,
+   - A derived summary over collections (for example, cart totals, unread counts, filtered lists with counts),
+   - Any undo/redo, time-travel, or event-log-backed summaries.
+3. For each example, record:
+   - Source (library, blog/tutorial link, section).
+   - What is being aggregated, at what granularity (per user, per UI component, global).
+   - Whether the aggregation semantically looks like a multiset function with a plausible inverse, or something that relies on ordering/time.
+4. Output:
+   - A list of about 15–25 FRP/UI examples, each with:
+     - a 1–2 sentence description, and
+     - a quick judgement: “natural fit for Skip collection+reducer”, “needs windows/time”, or “better modeled as a state machine, not a reducer”.
+

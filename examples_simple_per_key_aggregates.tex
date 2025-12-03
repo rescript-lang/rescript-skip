@@ -1,0 +1,83 @@
+% Simple per-key numeric and basic views
+\begin{example}[Active members per group service (Skip docs)]
+Input collection \texttt{memberships : GroupId $\times$ UserId}, plus a separate view or flag indicating which users are active.
+Define a derived collection \texttt{activeMembers : GroupId $\to$ int} by mapping only active \texttt{(groupId, userId)} pairs and using a count reducer per \texttt{GroupId}.
+On insertion of an active membership, increment the corresponding group’s count; on removal or when a user becomes inactive, decrement.
+This yields per-group active-member counts for use in admin dashboards or access-control views.
+\end{example}
+
+\begin{example}[Total sales by category service (Skip blog)]
+Input collection \texttt{sales : SaleId $\times$ Sale}, where \texttt{Sale} includes \texttt{categoryId} and \texttt{amount}.
+Define a resource \texttt{categoryTotals : CategoryId $\to$ Money} computed by mapping each sale to \texttt{(categoryId, amount)} and reducing per category with a sum reducer.
+New sales add \texttt{amount} to the appropriate category total; corrections or deletions subtract the previous amount, keeping real-time revenue or inventory value per category.
+\end{example}
+
+\begin{example}[Portfolio value by sector service (Skip blog)]
+Input collection \texttt{positions : PositionId $\times$ Position}, where \texttt{Position} includes \texttt{sector : SectorId}, \texttt{shares}, and \texttt{price}.
+A derived collection \texttt{sectorValue : SectorId $\to$ Money} is defined by mapping each position to \texttt{(sector, shares * price)} and summing per sector.
+On position updates (change in shares or price) or position insert/delete, the service applies the delta in \texttt{shares * price} to the corresponding sector, maintaining live sector-level portfolio values.
+\end{example}
+
+\begin{example}[Global active-user count service (conceptual Skip example)]
+Input collection \texttt{users : UserId $\times$ UserState}, where \texttt{UserState} includes an \texttt{isActive} flag.
+Define a single-key collection \texttt{activeCount : Unit $\to$ int} by mapping each active user to key \texttt{()} and using a count reducer.
+When a user becomes active, the service increments \texttt{activeCount[()]}; when they become inactive or are deleted, it decrements, providing a live global active-user metric.
+\end{example}
+
+\begin{example}[Max value per key service (Skip helper \texttt{Max})]
+Input collection \texttt{measurements : KeyId $\times$ Value}.
+Per key, the service maintains a single-number accumulator storing the current maximum value.
+On add of \texttt{(k,v)}, it sets \texttt{max[k] := max(max[k], v)}; on remove, if \texttt{v} is not equal to the stored maximum, no change is needed, otherwise the service recomputes the maximum from remaining values for \texttt{k}.
+The derived view \texttt{maxPerKey : KeyId $\to$ Value} exposes these maxima.
+\end{example}
+
+\begin{example}[Min value per key service (Skip helper \texttt{Min})]
+Analogous to the max service, with accumulator \texttt{min[k]} initialized to a top element.
+On add, it updates \texttt{min[k] := min(min[k], v)}; on remove of a non-minimum value, it does nothing; on removal of the current minimum, it recomputes the minimum from the remaining values for that key.
+The resource \texttt{minPerKey : KeyId $\to$ Value} supports queries like ``lowest price per product'' or ``earliest timestamp per stream''.
+\end{example}
+
+\begin{example}[Continuous count per key service (Kafka Streams KTable style)]
+Input collection \texttt{events : KeyId $\times$ Event}.
+The service maintains \texttt{counts : KeyId $\to$ int} where each new event with key \texttt{k} increments \texttt{counts[k]}.
+If deletions or tombstones are modeled, removing an event decrements \texttt{counts[k]}.
+This corresponds to classic word-count or per-key event-count services in KTable-like APIs.
+\end{example}
+
+\begin{example}[Per-window sum service (Flink, Spark, Beam variants)]
+Input collection \texttt{values : (KeyId, WindowId) $\times$ Number}, where \texttt{WindowId} encodes a time bucket or logical window.
+Define a view \texttt{windowSum : (KeyId, WindowId) $\to$ Number} that, for each key/window pair, maintains the sum of all values mapped to that pair using a simple additive reducer.
+Window creation and expiration are handled by separate logic that manages the \texttt{WindowId}s; within each window bucket, the aggregator is a pure per-key fold.
+\end{example}
+
+\begin{example}[Aggregated materialized view service (Materialize SQL \texttt{GROUP BY})]
+Input base collection \texttt{Sales(productId, amount)}.
+Define a derived view \texttt{ProductTotals : ProductId $\to$ Money} corresponding to \texttt{SELECT productId, SUM(amount) FROM Sales GROUP BY productId}.
+On insert of a sale for \texttt{p}, the service increments \texttt{ProductTotals[p]} by \texttt{amount}; on delete or retraction, it decrements by the same amount.
+This is a direct per-key sum over the \texttt{Sales} collection, mirroring Materialize’s incrementally maintained group-by.
+\end{example}
+
+\begin{example}[FRP event-counter service (Reactive-banana, Yampa, Elm \texttt{foldp})]
+Input collection \texttt{clicks : CounterId $\times$ unit} representing button-click events (or other discrete events) keyed by component or counter identifier.
+The service maintains \texttt{clickCount : CounterId $\to$ int}, with each event incrementing the corresponding counter.
+In languages like Elm or Yampa this is expressed as \texttt{foldp (+1) 0} over an event stream; in a Skip-style service it is a per-key count reducer over the \texttt{clicks} collection.
+\end{example}
+
+\begin{example}[Cart totals and sums service (Redux/UI frameworks)]
+Input collection \texttt{cartItems : UserId $\times$ CartItem}, where \texttt{CartItem} has fields \texttt{productId}, \texttt{quantity}, and \texttt{unitPrice}.
+Define a resource \texttt{cartTotal : UserId $\to$ Money} by mapping each cart item to \texttt{(userId, quantity * unitPrice)} and reducing with a sum per user.
+Front-end frameworks typically compute this in selectors or computed properties; this service maintains the same quantities reactively on the backend.
+\end{example}
+
+\begin{example}[Per-player score service (React \texttt{useReducer} example generalized)]
+Input collection \texttt{scoreEvents : PlayerId $\times$ int} where each entry represents a score delta (e.g.\ +1) for a player.
+The service maintains \texttt{scores : PlayerId $\to$ int}, incrementing \texttt{scores[p]} by the event’s delta for each \texttt{(p,delta)} and decrementing if negative deltas are supported.
+This captures multi-player scoreboards or leaderboards as simple per-player counters.
+\end{example}
+
+\begin{example}[Vertex-degree counting service (incremental graph systems)]
+Input collection \texttt{edges : EdgeId $\times$ (src : NodeId, dst : NodeId)}.
+The service derives a view \texttt{degree : NodeId $\to$ int} that counts incident edges per node.
+On insertion of edge \texttt{(u,v)}, it increments \texttt{degree[u]} and \texttt{degree[v]} (for undirected graphs) or just \texttt{degree[v]} (for in-degree in directed graphs); on deletion it decrements accordingly.
+This models the simplest incremental graph metric as a per-key count.
+\end{example}

@@ -5,7 +5,6 @@ const log = (...args) => {
 };
 // Mapper: multiply numeric values by 2, keep the same key.
 class DoubleMapper {
-    static runs = 0;
     mapEntry(key, values, _ctx) {
         DoubleMapper.runs += 1;
         log("mapper:doubled run", DoubleMapper.runs, "key", key);
@@ -13,20 +12,21 @@ class DoubleMapper {
         return [[key, n * 2]];
     }
 }
+DoubleMapper.runs = 0;
 // Mapper for sum: emit all values under a single "total" key.
 class TotalMapper {
-    static runs = 0;
     mapEntry(_key, values, _ctx) {
         TotalMapper.runs += 1;
         log("mapper:total run", TotalMapper.runs);
         return values.toArray().map((v) => ["total", v]);
     }
 }
+TotalMapper.runs = 0;
 // Reducer for sum: correctly implements add/remove.
 class SumReducer {
-    static runsAdd = 0;
-    static runsRemove = 0;
-    initial = 0;
+    constructor() {
+        this.initial = 0;
+    }
     add(acc, value) {
         SumReducer.runsAdd += 1;
         log("reducer:sum add", SumReducer.runsAdd);
@@ -38,6 +38,8 @@ class SumReducer {
         return acc - value;
     }
 }
+SumReducer.runsAdd = 0;
+SumReducer.runsRemove = 0;
 class NumbersResource {
     instantiate(collections) {
         return collections.numbers;

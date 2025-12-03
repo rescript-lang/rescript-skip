@@ -1,0 +1,30 @@
+% Set, index, and distinctness-oriented views
+\begin{example}[Groups-per-user index service (Skip docs)]
+Input collection \texttt{groupMembers : GroupId $\times$ UserId} encodes membership edges.
+Define a derived collection \texttt{groupsPerUser : UserId $\to$ array<GroupId>} by mapping each membership \texttt{(g,u)} to \texttt{(u,g)} and aggregating per user key so that all group IDs for a given user are collected.
+On insertion of a membership, the service appends \texttt{g} to the list for \texttt{u}; on deletion, it removes \texttt{g} from that list.
+This acts as an inverted index from users to the (multi)set of groups they belong to and supports queries like “list all groups for user \texttt{u}”.
+\end{example}
+
+\begin{example}[Exact distinct count per key service (Skip conceptual)]
+Input collection \texttt{events : KeyId $\times$ Value}.
+For each \texttt{KeyId}, maintain accumulator state \texttt{freq : Value $\to$ int} as in the enriched-state distinct-count example.
+The view \texttt{distinctPerKey : KeyId $\to$ (distinctValues : array<Value>, count : int)} exposes both the set of values with positive frequency and its size.
+On add of \texttt{(k,v)}, increment \texttt{freq[v]} for key \texttt{k}, inserting \texttt{v} into the exposed set when its frequency becomes positive; on remove, decrement \texttt{freq[v]} and delete \texttt{v} from the set when the frequency drops to zero.
+This yields exact per-key distinctness information suitable for analytics dashboards.
+\end{example}
+
+\begin{example}[Distinct visitors / approximate distinct service (streaming systems)]
+Input collection \texttt{visits : (Day, PageId) $\times$ UserId} records page views, keyed by day and page.
+The service maintains, for each \texttt{(Day, PageId)} pair, either:
+  (i) an exact accumulator \texttt{visitors : UserId $\to$ int} (for low-volume cases), from which it derives \texttt{uniqueVisitors : (Day, PageId) $\to$ int} as the number of users with positive frequency; or
+  (ii) a HyperLogLog sketch per \texttt{(Day, PageId)}, updated on each visit, and exposes \texttt{approxUniqueVisitors : (Day, PageId) $\to$ int} as the HLL cardinality estimate.
+This models streaming distinct-count queries (e.g.\ “unique visitors per day per page”) seen in Flink/Beam/Materialize, with both exact and approximate variants.
+\end{example}
+
+\begin{example}[General inverted index and membership view service]
+Given a base collection \texttt{relations : LeftId $\times$ RightId} encoding edges of a bipartite relation (e.g.\ users–groups, documents–terms, products–tags), the service defines two derived collections:
+  (i) \texttt{rightPerLeft : LeftId $\to$ array<RightId>}, collecting all right identifiers associated with a given left identifier; and
+  (ii) \texttt{leftPerRight : RightId $\to$ array<LeftId>}, the inverted index mapping each right identifier to all left identifiers that reference it.
+On insertion or deletion of a pair \texttt{(l,r)}, the service symmetrically updates both collections, providing bidirectional membership views that support queries such as “all documents with term \texttt{t}” or “all tags for product \texttt{p}”.
+\end{example}

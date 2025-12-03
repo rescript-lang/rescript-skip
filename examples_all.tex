@@ -1,0 +1,41 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb,amsthm}
+
+\newtheorem{example}{Example}[section]
+
+\title{Example Catalogue for Reactive Views}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\tableofcontents
+
+\section{Simple Per-Key Views}
+\input{examples_simple_per_key_aggregates.tex}
+
+\section{Enriched-State Views}
+\input{examples_enriched_state_aggregates.tex}
+
+\section{Set and Index Views}
+\input{examples_set_index_views.tex}
+
+\section{Windowed and Session-Based Views}
+\input{examples_windowed_session_aggregates.tex}
+
+\section{History and Ordered-State Patterns}
+\input{examples_history_ordered_patterns.tex}
+
+\section{Graph and Relational Incremental Maintenance}
+\input{examples_graph_relational_incremental.tex}
+
+\section{Business Metrics and UI-Composed Summaries}
+\input{examples_business_ui_composite.tex}
+
+\end{document}
