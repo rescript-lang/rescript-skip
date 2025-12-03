@@ -23,13 +23,13 @@ Given a distributed program graph split across files, each file contributes:
 \end{itemize}
 A node is \emph{dead} if it is not reachable from any root in the global graph.
 Files change over time via \texttt{+} (additions) and \texttt{-} (removals) of nodes/roots/edges.
-We want a two-layer reactive service:
+We factor DCE into two conceptual layers:
 \begin{enumerate}
-  \item Aggregate all file fragments into a global graph.
-  \item Maintain DCE results incrementally as files change.
+  \item \textbf{Reactive layer}: aggregate all file fragments into a global graph view.
+  \item \textbf{Incremental layer}: maintain DCE results over that graph as files change.
 \end{enumerate}
 
-\section{Layer 1: Aggregating the distributed graph}
+\section{Layer 1 (Reactive): Aggregating the distributed graph}
 Use a per-file \textbf{mapper} that turns a file into a fragment
 (\textsf{nodes}, \textsf{roots}, \textsf{edges}).
 Use a \textbf{reducer} to combine fragments into a global graph.
@@ -55,8 +55,10 @@ Because we use multisets, $(G \oplus f) \ominus f = G$ (``remove undoes add''). 
   \item an inverse law: removing a just-added fragment restores the prior state.
 \end{itemize}
 These algebraic properties are established abstractly in \texttt{reduce.tex}; in the DCE setting, they amount to the obvious commutativity/associativity of multiset union/subtraction and the cancellation law $(G \oplus f) \ominus f = G$.
+Conceptually, Layer~1 is a \emph{reactive view}: the graph state $G$ is just the accumulator of this well-formed reducer over the current multiset of file fragments, and updates to files are propagated by the generic reactive machinery for reducers.
 
-\section{Layer 2: Incremental DCE over the global graph}
+\section{Layer 2 (Incremental): DCE over the global graph}
+Layer~2 sits on top of the reactive graph view $G$ and is purely incremental: its job is to maintain, under updates, the same live/dead partition we would get by recomputing from scratch.
 Given the aggregated graph $G$, define:
 \begin{itemize}
   \item $E = $ deduped edges as a finite set of pairs.
@@ -94,7 +96,7 @@ For Layer~2:
   \item \texttt{-} edge $(u,v)$: $O(1)$ if $u$ is dead or $\mathsf{liveIn}(v) > 1$; otherwise may cascade along the subgraph reachable from $v$ until nodes with alternate incoming live edges halt the cascade.
   \item \texttt{+}/\texttt{-} node: reduce to adds/removes of its incident edges and root status.
 \end{itemize}
-Thus the reactive work is bounded by the size of the affected reachable component; in the worst case it is linear in $|E|$, but it is \emph{delta-bounded} to the portion of the graph whose liveness actually changes. The output delta (changes in live/dead sets) is similarly bounded by the size of that affected slice.
+Thus the incremental work in Layer~2 is bounded by the size of the affected reachable component; in the worst case it is linear in $|E|$, but it is \emph{delta-bounded} to the portion of the graph whose liveness actually changes. The output delta (changes in live/dead sets) is similarly bounded by the size of that affected slice.
 
 \section{Incremental DCE Algorithm}
 
@@ -223,44 +225,30 @@ After each call to \textsc{AddFragment} or \textsc{RemoveFragment}, the algorith
 \]
 That is, the algorithm's $\mathsf{live}$ set equals the specification $\mathsf{liveSet}(G)$, and the refcount of each node equals the number of incoming edges from live nodes in the current graph.
 
-\paragraph{Relationship to the Lean formalization.}
-The Lean formalization (Section~\ref{sec:lean}) provides:
-\begin{enumerate}
-  \item \textbf{Specification}: Formal definitions of \texttt{liveSet} and \texttt{refcountSpec} that define what the correct answer is.
-  \item \textbf{Correctness theorem}: Any algorithm maintaining the invariant \texttt{refInvariant} produces the specification result (\texttt{runRefcount\_eq\_refSpec}).
-  \item \textbf{Characterization theorems}: Proven properties that \emph{describe} how liveness changes:
-    \begin{itemize}
-      \item \texttt{liveSet\_add\_as\_closure}: new live $=$ old live $\cup$ closure(frontier)
-      \item \texttt{liveSet\_remove\_as\_difference}: new live $=$ old live $\setminus$ newlyDead
-      \item \texttt{refcount\_zero\_iff\_no\_live\_incoming}: cascade triggers when refcount $= 0$
-    \end{itemize}
-  \item \textbf{Delta bounds}: Proven bounds on which nodes are affected.
-\end{enumerate}
-
-\paragraph{Gap: Algorithm vs.\ specification.}
-The Lean file does \emph{not} directly verify the pseudocode algorithms above.
-The concrete step function \texttt{refcountDeltaStep} in Lean simply recomputes $\mathsf{liveSet}(G')$ from scratch rather than implementing the incremental BFS/cascade logic.
-The characterization theorems provide strong \emph{guidance} that the algorithms are correct---they show that the new live set is exactly what BFS from the frontier would compute, and that cascade triggers exactly when refcount hits zero---but there is no machine-checked proof that the imperative loops implement this specification.
-
-To fully verify the algorithms, one would need to either: (a)~formalize the queue-based loops in Lean and prove loop invariants, or (b)~use a refinement approach connecting a functional algorithm to the specification.
-For practical purposes, the characterization theorems provide high confidence that a correct implementation of the pseudocode will satisfy the invariant.
-
-\paragraph{TODO.}
-Port the incremental BFS/cascade algorithm into the Lean step function (replacing \texttt{refcountDeltaStep}'s recomputation) and prove it preserves \texttt{refInvariant}.
-
 \section{Lean artefact}
 \label{sec:lean}
-The Lean file \texttt{lean-formalisation/DCE.lean} formalizes:
-
-\paragraph{Layer 1 (Graph aggregation).}
+The Lean development is organized into two layers with \texttt{lean-formalisation/DCE.lean} as a thin entry module:
 \begin{itemize}
-  \item \texttt{Frag}, \texttt{GraphState}: multiset-based fragments and global state.
-  \item \texttt{addFrag}/\texttt{removeFrag}: the reducer operations.
-  \item \texttt{fragReducer} instantiates \texttt{Reducer} from \texttt{Reduce.lean}; \texttt{fragReducer\_wellFormed} proves the \texttt{WellFormedReducer} law (\texttt{remove} undoes \texttt{add} on any accumulated state), and \texttt{fragReducer\_pairwiseComm} shows pairwise commutativity of \texttt{addFrag}/\texttt{removeFrag}.
-  \item The general reducer calculus is documented in \texttt{reduce.tex} (and \texttt{lean-formalisation/Reduce.lean}); \texttt{DCE.lean} imports those definitions and instantiates them for fragments.
+  \item \textbf{Layer~1}: \texttt{DCE/Layer1.lean} (reactive graph aggregation).
+  \item \textbf{Layer~2}: split into four files under \texttt{DCE/Layer2/}:
+    \begin{itemize}
+      \item \texttt{Spec.lean}: basic definitions (\texttt{Reachable}, \texttt{liveSet}, \texttt{RefState}, \texttt{refInvariant}).
+      \item \texttt{Algorithm.lean}: algorithm framework (\texttt{RefcountAlg}, \texttt{runRefcount}).
+      \item \texttt{Characterization.lean}: BFS/cascade characterization lemmas.
+      \item \texttt{Bounds.lean}: delta bounds and end-to-end correctness.
+    \end{itemize}
+    \texttt{DCE/Layer2.lean} re-exports all four sub-modules.
 \end{itemize}
 
-\paragraph{Layer 2 (Incremental DCE).}
+\subsection{Layer 1 (Reactive graph aggregation)}
+\begin{itemize}
+  \item \texttt{Frag}, \texttt{GraphState}: multiset-based fragments and global state, defined in \texttt{DCE/Layer1.lean}.
+  \item \texttt{addFrag}/\texttt{removeFrag}: the reducer operations.
+  \item \texttt{fragReducer} instantiates \texttt{Reducer} from \texttt{Reduce.lean}; \texttt{fragReducer\_wellFormed} proves the \texttt{WellFormedReducer} law (\texttt{remove} undoes \texttt{add} on any accumulated state), and \texttt{fragReducer\_pairwiseComm} shows pairwise commutativity of \texttt{addFrag}/\texttt{removeFrag}.
+  \item The general reducer calculus is documented in \texttt{reduce.tex} (and \texttt{lean-formalisation/Reduce.lean}); \texttt{DCE/Layer1.lean} imports those definitions and instantiates them for fragments.
+\end{itemize}
+
+\subsection{Layer 2 (Incremental DCE)}
 \begin{itemize}
   \item \texttt{Reachable}: inductive definition of reachability from roots via edges.
   \item \texttt{liveSet}, \texttt{deadSet}: specification of live/dead nodes.
@@ -272,7 +260,7 @@ The Lean file \texttt{lean-formalisation/DCE.lean} formalizes:
   \item \texttt{runRefcount\_eq\_refSpec}: end-to-end correctness---any algorithm preserving the invariant produces the specification result after folding deltas.
 \end{itemize}
 
-\paragraph{BFS characterization for additions.}
+\subsubsection{BFS characterization for additions}
 \begin{itemize}
   \item \texttt{Reachable\_mono}: reachability is monotonic (adding edges/roots only expands liveness).
   \item \texttt{liveSet\_mono\_addFrag}: adding a fragment can only expand the live set.
@@ -280,7 +268,7 @@ The Lean file \texttt{lean-formalisation/DCE.lean} formalizes:
   \item \texttt{liveSet\_add\_as\_closure}: \emph{proven} that $\mathsf{liveSet}(G') = \mathsf{liveSet}(G) \cup \mathsf{closure}(\mathsf{frontier})$, formalizing the ``\texttt{+} root'' and ``\texttt{+} edge'' rules from Section~3.
 \end{itemize}
 
-\paragraph{Cascade characterization for removals.}
+\subsubsection{Cascade characterization for removals}
 \begin{itemize}
   \item \texttt{liveSet\_removeFrag\_subset}: removing a fragment can only shrink the live set (anti-monotonicity).
   \item \texttt{newlyDead}: the set of nodes that become dead after removal (were live, now unreachable).
@@ -290,7 +278,7 @@ The Lean file \texttt{lean-formalisation/DCE.lean} formalizes:
   \item \texttt{refcount\_zero\_iff\_no\_live\_incoming}: \emph{proven} that $\mathsf{refcount}(v) = 0$ iff $v$ has no incoming edges from still-live nodes, formalizing when the cascade triggers.
 \end{itemize}
 
-\paragraph{Complexity and delta bounds.}
+\subsubsection{Complexity and delta bounds}
 \begin{itemize}
   \item \texttt{newlyLive}: the set of nodes that become live after adding (the ``add delta'').
   \item \texttt{newlyDead}: the set of nodes that become dead after removing (the ``remove delta'').
@@ -306,7 +294,13 @@ The Lean file \texttt{lean-formalisation/DCE.lean} formalizes:
   \item \texttt{refcount\_change\_bound}: \emph{proven} that refcounts only change for nodes with edges from the delta or edges in the fragment, enabling efficient incremental updates.
 \end{itemize}
 
-These lemmas formalize that the reactive work is \emph{delta-bounded}: only nodes in the delta (and their neighbors for refcount updates) require processing. The frontier for add consists of $O(|f.\mathsf{roots}| + |f.\mathsf{edges}|)$ nodes, and the reachable set from the frontier bounds the actual work. All proofs are complete with no remaining \texttt{sorry}s in the Lean formalization.
+\subsubsection{Algorithm vs.\ specification and future work}
+The current Lean development in \texttt{DCE/Layer2/} does not directly formalize the queue-based pseudocode algorithms from Section~4 as imperative loops.
+Instead, the concrete step function \texttt{refcountDeltaStep} recomputes $\mathsf{liveSet}(G')$ and $\mathsf{refcountSpec}(G')$ for the updated graph $G'$ and proves that this recompute-based step preserves the invariant \texttt{refInvariant}.
+The characterization and delta-bound theorems in the preceding subsubsections show that the new live set is exactly the closure of a small frontier and that cascades only affect nodes in a bounded region of the graph; they thus provide strong guidance for implementing a BFS/cascade-style incremental algorithm that would satisfy the same invariant.
+As future work, one could either formalize the queue-based loops in Lean and prove loop invariants, or follow a refinement approach that derives a functional incremental step from the specification and then relates it to an imperative implementation; in either case, the goal is to replace \texttt{refcountDeltaStep}'s recomputation with a proven incremental BFS/cascade algorithm.
+
+These lemmas formalize that the incremental work in Layer~2 is \emph{delta-bounded}: only nodes in the delta (and their neighbors for refcount updates) require processing. The frontier for add consists of $O(|f.\mathsf{roots}| + |f.\mathsf{edges}|)$ nodes, and the reachable set from the frontier bounds the actual work. All proofs are complete with no remaining \texttt{sorry}s in the Lean formalization.
 
 \section{Toward a Skip service}
 A realistic Skip service can be structured in two layers of resources:
@@ -323,28 +317,15 @@ A realistic Skip service can be structured in two layers of resources:
 \end{enumerate}
 
 In the Skip bindings, Layer~1 is a standard \texttt{EagerCollection.reduce} with a well-formed reducer
-(\texttt{addFrag}/\texttt{removeFrag}). Layer~2 is not a pure reducer; it is best implemented
+(\texttt{addFrag}/\texttt{removeFrag}); this is the reactive layer, where the global graph is maintained as a reducer-backed view of the file-fragment collection. Layer~2 is not a pure reducer; it is best implemented
 as a \texttt{LazyCompute} or service module that:
 \begin{itemize}
   \item subscribes to the \texttt{graph} resource;
   \item keeps a refcount map and a live set in memory;
-  \item applies the delta-handling rules from Section~2 (refcount bumps/drops, reachability propagation);
+  \item applies the delta-handling rules from the incremental algorithm (refcount bumps/drops, reachability propagation);
   \item publishes live/dead as derived resources.
 \end{itemize}
 This preserves the algebraic guarantees where they apply (Layer~1) while accommodating the global,
-graph-shaped logic of DCE in a custom reactive compute node (Layer~2).
-
-\section{Layer 2 as an invertible reducer?}
-Conceptually, Layer~2 consumes graph deltas and maintains liveness. One might ask whether it could be packaged as a single invertible reducer in the sense of \texttt{reduce.tex}, with some accumulator $A$ and update operations $(\oplus,\ominus)$ that:
-\begin{itemize}
-  \item are pairwise commutative (order-independent) and satisfy the inverse law, and
-  \item from which the current live set can be read off as a projection of $A$.
-\end{itemize}
-There is a trivial positive answer and a negative answer that explains why we do not pursue this design:
-\begin{itemize}
-  \item \emph{Trivial positive.} Take $A$ to contain the Layer~1 graph $G$ together with any Layer~2 state, and let $\oplus,\ominus$ be exactly the Layer~1 multiset add/remove on $G$ (with liveness recomputed or updated as a view). This is an invertible reducer, but it is just ``Layer~1 reducer + derived view'' and does not add any new algebraic structure for liveness.
-  \item \emph{Negative for smaller $A$.} Any attempt to shrink $A$ to something that only stores Layer~2 summaries (e.g.\ just live/dead sets and refcounts) forgets information about the graph (such as edges between currently dead nodes) that can affect the liveness of future updates. Two different graphs can induce the same summary state but respond differently to a new fragment, so no single pair of operations $(\oplus,\ominus)$ on summaries can both satisfy the reducer laws and coincide with the graph-based specification for all inputs.
-\end{itemize}
-For this reason we keep the split: Layer~1 is an invertible reducer over graph fragments; Layer~2 is a graph algorithm layered on top of that reducer, not an invertible reducer in its own right.
+graph-shaped logic of DCE in a custom incremental compute node layered on top of that reactive reducer (Layer~2).
 
 \end{document}
