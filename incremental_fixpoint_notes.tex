@@ -9,6 +9,7 @@
 \newtheorem{definition}{Definition}
 \newtheorem{example}{Example}
 \newtheorem{remark}{Remark}
+\newtheorem{theorem}{Theorem}
 
 \title{Incremental Fixpoint Computation:\\A Two-Level Architecture}
 \author{}
@@ -65,88 +66,66 @@ Compute $S' = \mathsf{lfp}(F')$ efficiently, in time proportional to $|S' \trian
 
 \section{Level 1: Low-Level Incremental Fixpoint API}
 
-The low-level API assumes the user provides the necessary incremental operations.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subsection{API Specification}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-\subsection{Required Ingredients}
+\subsubsection{Types}
 
-\paragraph{For Semi-Naive Expansion.}
-When $F' \supseteq F$ (the operator grows), we use \emph{semi-naive evaluation}:
-\begin{itemize}
-  \item Maintain the ``delta'' $\Delta S$ = elements added in the last iteration
-  \item Instead of computing $F'(S)$, compute only $\mathsf{stepFromDelta}(\Delta S) \setminus S$
-\end{itemize}
+\begin{center}
+\begin{tabular}{ll}
+$A$ & Element type (e.g., graph nodes) \\
+$\mathsf{Set}(A)$ & Finite sets of elements \\
+$\mathsf{Map}(A, \mathbb{N})$ & Map from elements to natural numbers (ranks)
+\end{tabular}
+\end{center}
 
-The user provides:
-\[
-\mathsf{stepFromDelta} : \mathsf{Params} \times \mathcal{P}(A) \to \mathcal{P}(A)
-\]
-Given the current parameters and a delta set, return elements derivable from that delta.
+\subsubsection{Configuration (User Provides)}
 
-\begin{example}[DCE]
-$\mathsf{stepFromDelta}(G, \Delta) = \{ v \mid \exists u \in \Delta.\, (u,v) \in G.\mathsf{edges} \}$
-\end{example}
+\begin{center}
+\begin{tabular}{lp{8cm}}
+$\mathsf{base} : \mathsf{Set}(A)$ & Seed elements (e.g., roots in DCE) \\
+$\mathsf{stepFwd} : A \to \mathsf{Set}(A)$ & Forward derivation: elements derived from one element \\
+$\mathsf{stepInv} : A \to \mathsf{Set}(A)$ & Inverse: elements that derive a given element
+\end{tabular}
+\end{center}
 
-\paragraph{For Counting-Based Contraction.}
-When $F' \subseteq F$ (the operator shrinks), we use \emph{well-founded cascade}:
-\begin{itemize}
-  \item Use the iterative construction rank to identify well-founded derivers
-  \item Remove elements with no well-founded derivers (and not in base)
-  \item Propagate: removing an element may eliminate derivers for others
-\end{itemize}
+\medskip
+\noindent Define $\mathsf{step}(S) = \bigcup_{x \in S} \mathsf{stepFwd}(x)$ and $F(S) = \mathsf{base} \cup \mathsf{step}(S)$.
 
-The key insight: cycle members have equal rank, so they don't provide well-founded support to each other. This correctly handles unreachable cycles.
+\subsubsection{State (System Maintains)}
 
-\subsection{Specification (Not Implementation)}
+\begin{center}
+\begin{tabular}{lp{8cm}}
+$\mathsf{current} : \mathsf{Set}(A)$ & Current live set $= \mathsf{lfp}(F)$ \\
+$\mathsf{rank} : \mathsf{Map}(A, \mathbb{N})$ & Rank of each element (BFS distance from base)
+\end{tabular}
+\end{center}
 
-\textbf{Important:} What follows is a \emph{mathematical specification} of what the update algorithms compute, not an executable implementation. The Lean formalization proves correctness of these specifications but does not provide runnable code.
+\subsubsection{Required Properties}
 
-The user provides:
-\begin{itemize}
-  \item $\mathsf{base}$: seed elements
-  \item $\mathsf{stepFromDelta}$: derive new elements from a delta
-  \item Proof that step is \emph{element-wise}: $x \in \mathsf{step}(S) \Rightarrow \exists y \in S.\, x \in \mathsf{step}(\{y\})$
-  \item Proof that step is \emph{additive}: $\mathsf{step}(A \cup B) = \mathsf{step}(A) \cup \mathsf{step}(B)$
-\end{itemize}
+The user must ensure:
+\begin{enumerate}
+\item \textbf{stepInv correctness:} $y \in \mathsf{stepInv}(x) \Leftrightarrow x \in \mathsf{stepFwd}(y)$
+\item \textbf{Element-wise} (automatic): $\mathsf{step}$ decomposes per-element via $\mathsf{stepFwd}$
+\item \textbf{Additive} (automatic): $\mathsf{step}(A \cup B) = \mathsf{step}(A) \cup \mathsf{step}(B)$
+\end{enumerate}
 
-\begin{example}[DCE]
-DCE satisfies both properties: if $v$ is reachable from $S$, there's a specific predecessor $u \in S$ with $(u,v) \in \mathsf{edges}$.
-\end{example}
-
-\subsection{Update Algorithms (Specification)}
-
-\paragraph{Expansion.}
-When $F$ grows, semi-naive iteration computes:
+\begin{example}[DCE Instance]
 \begin{align*}
-C_0 &= \mathsf{lfp}(F) & \Delta_0 &= \mathsf{lfp}(F) \\
-C_{n+1} &= C_n \cup \Delta_{n+1} & \Delta_{n+1} &= \mathsf{step}'(\Delta_n) \setminus C_n
+\mathsf{base} &= \mathsf{roots} \\
+\mathsf{stepFwd}(u) &= \{ v \mid (u, v) \in \mathsf{edges} \} \quad \text{(successors)} \\
+\mathsf{stepInv}(v) &= \{ u \mid (u, v) \in \mathsf{edges} \} \quad \text{(predecessors)}
 \end{align*}
-The sequence $C_n$ is monotonically increasing. If it stabilizes (i.e., $\Delta_{n+1} = \emptyset$ for some $n$), then $C_n = \mathsf{lfp}(F')$.
+\end{example}
 
-\paragraph{Contraction.}
-When $F$ shrinks, well-founded cascade computes:
-\[
-K_0 = \mathsf{lfp}(F), \qquad K_{n+1} = K_n \setminus \{ x \in K_n \mid x \notin \mathsf{base}' \land \text{no wf-deriver in } K_n \}
-\]
-where an element's \emph{rank} is when it first appears in $F^n(\emptyset)$, and $y$ is a \emph{well-founded deriver} of $x$ if $\mathsf{rank}(y) < \mathsf{rank}(x)$ and $x \in \mathsf{step}'(\{y\})$.
-Cycles don't provide support because cycle members have equal rank.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subsection{Algorithms}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-The sequence $K_n$ is monotonically decreasing. If it stabilizes, then $K_n = \mathsf{lfp}(F')$.
+\subsubsection{Expansion (BFS)}
 
-\subsection{From Specification to Implementation}
-
-The key insight: if we \textbf{store ranks explicitly}, the implementation becomes straightforward and achieves optimal complexity (matching dedicated implementations like DCE).
-
-\paragraph{Extended API.}
-Add to the configuration:
-\begin{itemize}
-  \item $\mathsf{stepInv}(x) = \{ y \mid x \in \mathsf{step}(\{y\}) \}$ --- inverse of step (predecessors)
-\end{itemize}
-Add to the state:
-\begin{itemize}
-  \item $\mathsf{rank} : A \to \mathbb{N}$ --- BFS distance from base for each element
-\end{itemize}
-
-\paragraph{Expansion Algorithm (BFS).}
+When the operator grows ($F \sqsubseteq F'$: base or edges added), propagate new elements:
 
 \begin{verbatim}
 expand(state, config'):
@@ -165,12 +144,13 @@ expand(state, config'):
     r += 1
 \end{verbatim}
 
-\textbf{Complexity:} $O(|\text{new elements}| + |\text{edges from new elements}|)$
+\subsubsection{Contraction (Worklist Cascade)}
 
-\paragraph{Contraction Algorithm (Worklist Cascade).}
+When the operator shrinks ($F' \sqsubseteq F$: base or edges removed), remove unsupported elements:
 
 \begin{verbatim}
 contract(state, config'):
+  // Initialize: nodes that lost base membership or an incoming edge
   worklist = { x | x lost support }
   dying = {}
 
@@ -178,167 +158,109 @@ contract(state, config'):
     x = worklist.pop()
     if x in dying or x in config'.base: continue
 
-    // Check for well-founded deriver
+    // Check for well-founded deriver (strictly lower rank)
     hasSupport = false
     for y in config'.stepInv(x):
       if y in (state.current \ dying) and state.rank[y] < state.rank[x]:
-        hasSupport = true; break
+        hasSupport = true
+        break
 
     if not hasSupport:
       dying.add(x)
+      // Notify dependents
       for z where x in config'.stepInv(z):
         worklist.add(z)
 
   state.current -= dying
 \end{verbatim}
 
-\textbf{Complexity:} $O(|\text{dying nodes}| + |\text{edges to dying nodes}|)$
+\subsubsection{Why Ranks Break Cycles}
 
-\paragraph{Why This Is Optimal for DCE.}
-For DCE with graph $G = (V, E)$:
+The rank check $\mathsf{rank}[y] < \mathsf{rank}[x]$ is essential:
 \begin{itemize}
-  \item $\mathsf{stepFwd}(u) = \text{successors}(u)$ --- $O(\text{out-degree})$
-  \item $\mathsf{stepInv}(v) = \text{predecessors}(v)$ --- $O(\text{in-degree})$
-  \item $\mathsf{rank}[y] < \mathsf{rank}[x]$ --- $O(1)$ integer comparison
-\end{itemize}
-This matches the complexity of dedicated graph reachability algorithms.
-The rank-based API \emph{generalizes} this to any decomposed fixpoint operator.
-
-\paragraph{Storage Cost.}
-One integer (rank) per element. Trivial overhead.
-
-\begin{remark}[Gap Between Proofs and Algorithms]
-\textbf{What Lean proves} (specification level):
-\begin{itemize}
-  \item Semi-naive iteration, when stable, equals $\mathsf{lfp}(F')$
-  \item Well-founded cascade, when stable, equals $\mathsf{lfp}(F')$
-  \item Soundness of intermediate states
+\item Cycle members have \emph{equal} ranks (same BFS distance from base)
+\item Therefore, they cannot provide well-founded support to each other
+\item An unreachable cycle has no well-founded support and is correctly removed
 \end{itemize}
 
-\textbf{What the pseudo-code adds} (implementation level):
-\begin{itemize}
-  \item Concrete worklist/BFS structure
-  \item Explicit rank storage and comparison
-  \item Iteration order and data structure choices
-\end{itemize}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subsection{Correctness and Analysis}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-\textbf{Gaps not formally proven:}
-\begin{enumerate}
-  \item \textbf{Refinement:} The pseudo-code correctly implements the specification.
-        \emph{Status:} Visually obvious---each loop iteration corresponds to one spec step.
-  \item \textbf{Termination:} The algorithms terminate for finite domains.
-        \emph{Status:} Clear for finite sets (each iteration changes a finite set monotonically).
-  \item \textbf{stepInv correctness:} The user-provided inverse is correct.
-        \emph{Status:} Assumed; for DCE this is just the predecessor relation.
-\end{enumerate}
-
-These gaps are ``obvious'' in the sense that closing them would be mechanical.
-A good engineer can implement the pseudo-code with confidence.
-\end{remark}
-
-\subsection{Formal Definitions and Correctness}
-
-\newtheorem{theorem}{Theorem}
-
-\subsubsection{Decomposed Operators}
-
-\begin{definition}[Decomposed Operator]
-An operator $F : \mathcal{P}(A) \to \mathcal{P}(A)$ is \emph{decomposed} if $F(S) = B \cup \mathsf{step}(S)$ where $B$ is a fixed base set and $\mathsf{step}$ is monotone: $S \subseteq T \Rightarrow \mathsf{step}(S) \subseteq \mathsf{step}(T)$.
-\end{definition}
-
-\begin{definition}[Operator Expansion and Contraction]
-We say $F$ \emph{expands to} $F'$, written $F \sqsubseteq F'$, if $\forall S.\, F(S) \subseteq F'(S)$.
-Dually, $F$ \emph{contracts to} $F'$ if $F' \sqsubseteq F$.
-\end{definition}
-
-\begin{theorem}[Fixpoint Monotonicity]
-\leavevmode
-\begin{enumerate}
-\item If $F \sqsubseteq F'$ then $\mathsf{lfp}(F) \subseteq \mathsf{lfp}(F')$.
-\item If $F' \sqsubseteq F$ then $\mathsf{lfp}(F') \subseteq \mathsf{lfp}(F)$.
-\end{enumerate}
-\end{theorem}
-
-\subsubsection{Semi-Naive Iteration (Expansion)}
-
-\begin{definition}[Semi-Naive Iteration]
-Given a decomposed operator $(B, \mathsf{step})$ and initial set $I$, define:
-\begin{align*}
-C_0 &= I & \Delta_0 &= I \\
-C_{n+1} &= C_n \cup \Delta_{n+1} & \Delta_{n+1} &= \mathsf{step}(\Delta_n) \setminus C_n
-\end{align*}
-\end{definition}
-
-\begin{theorem}[Semi-Naive Monotonicity]
-$C_n \subseteq C_{n+1}$ for all $n \geq 0$.
-\end{theorem}
-
-\begin{theorem}[Semi-Naive Soundness]
-If $I \subseteq \mathsf{lfp}(F)$, then $C_n \subseteq \mathsf{lfp}(F)$ for all $n \geq 0$.
-\end{theorem}
-
-\subsubsection{Well-Founded Cascade (Contraction)}
-\label{sec:wf-derivations}
-
-\begin{definition}[Iterative Construction and Rank]
-The least fixpoint is constructed iteratively:
-\begin{align*}
-F^0(\emptyset) &= \emptyset, \qquad
-F^{n+1}(\emptyset) = F(F^n(\emptyset)), \qquad
-\mathsf{lfp}(F) = \bigcup_{n \geq 0} F^n(\emptyset)
-\end{align*}
-The \emph{rank} of $x \in \mathsf{lfp}(F)$ is the minimum $n$ such that $x \in F^n(\emptyset)$.
-Elements not in $\mathsf{lfp}(F)$ have no finite rank.
-\end{definition}
-
-\begin{definition}[Well-Founded Derivation]
-Element $y$ \emph{well-foundedly derives} $x$ if $\mathsf{rank}(y) < \mathsf{rank}(x)$ and $x \in \mathsf{step}(\{y\})$.
-\end{definition}
-
-\begin{definition}[Well-Founded Cascade]
-Given initial set $I$:
-\begin{align*}
-\mathsf{wfShouldDie}(S) &= \{ x \in S \mid x \notin B \land \text{no wf-deriver in } S \} \\
-K_0 &= I, \qquad K_{n+1} = K_n \setminus \mathsf{wfShouldDie}(K_n)
-\end{align*}
-Key insight: cycle members have equal (or no) rank, so they don't provide well-founded support to each other.
-\end{definition}
-
-\begin{theorem}[Cascade Monotonicity]
-$K_{n+1} \subseteq K_n$ for all $n \geq 0$.
-\end{theorem}
-
-\begin{theorem}[Base Preservation]
-If $B \subseteq I$, then $B \subseteq K_n$ for all $n \geq 0$.
-\end{theorem}
-
-\subsubsection{Overall Correctness}
+\subsubsection{Proven Properties (Lean, all complete)}
 
 \begin{theorem}[Expansion Correctness]
-Let $F \sqsubseteq F'$ (expansion), $S = \mathsf{lfp}(F)$, and $S' = \mathsf{lfp}(F')$.
-If semi-naive iteration from $S$ with operator $F'$ stabilizes, then $C_n = S'$.
+If $F \sqsubseteq F'$ and expansion terminates, then $\mathsf{current} = \mathsf{lfp}(F')$.
 \end{theorem}
 
 \begin{theorem}[Contraction Correctness]
-Let $F' \sqsubseteq F$ (contraction), $S = \mathsf{lfp}(F)$, $S' = \mathsf{lfp}(F')$.
-Assume $\mathsf{step}$ is \emph{element-wise}: $x \in \mathsf{step}(T) \Rightarrow \exists y \in T.\, x \in \mathsf{step}(\{y\})$.
-Then well-founded cascade from $S$ converges to $K^* = S'$.
+If $F' \sqsubseteq F$ and contraction terminates, then $\mathsf{current} = \mathsf{lfp}(F')$.
 \end{theorem}
 
-\begin{remark}[Lean Formalization]
-All definitions and theorems are formalized in Lean with \textbf{all proofs complete} (no \texttt{sorry}).%
+\begin{theorem}[Soundness]
+At all intermediate states: expansion gives $\mathsf{current} \subseteq \mathsf{lfp}(F')$; contraction gives $\mathsf{lfp}(F') \subseteq \mathsf{current}$.
+\end{theorem}
+
+All proofs complete in Lean with no \texttt{sorry}.%
 \footnote{See \texttt{lean-formalisation/IncrementalFixpoint.lean}.}
 
-\textbf{Proven theorems:}
-\begin{itemize}
-  \item Well-founded contraction correctness
-  \item Semi-naive expansion correctness (including the key lemma that $\mathsf{step}(\mathsf{current}) \subseteq \mathsf{current}$ when stable, using additivity)
-  \item Fixpoint monotonicity under expansion/contraction
-  \item All helper lemmas for iteration, ranking, and cascade
-\end{itemize}
+\subsubsection{Complexity Analysis}
 
-The API requires: \texttt{stepElementWise} and \texttt{stepAdditive}. Both hold for DCE.
-\end{remark}
+\begin{center}
+\begin{tabular}{|l|c|c|}
+\hline
+\textbf{Operation} & \textbf{Time} & \textbf{Space} \\
+\hline
+Expansion & $O(|\text{new}| + |\text{edges from new}|)$ & $O(|\text{new}|)$ \\
+Contraction & $O(|\text{dying}| + |\text{edges to dying}|)$ & $O(|\text{dying}|)$ \\
+Rank storage & --- & $O(|\mathsf{current}|)$ integers \\
+\hline
+\end{tabular}
+\end{center}
+
+For DCE, this matches the complexity of dedicated graph reachability algorithms.
+
+\subsubsection{Gap Between Proofs and Algorithms}
+
+\begin{center}
+\begin{tabular}{|l|p{5cm}|l|}
+\hline
+\textbf{Gap} & \textbf{Description} & \textbf{Status} \\
+\hline
+Refinement & Pseudo-code implements the spec & Visually obvious \\
+Termination & Algorithms halt on finite sets & Clear (monotonic) \\
+stepInv & User provides correct inverse & Assumed \\
+\hline
+\end{tabular}
+\end{center}
+
+These gaps are mechanical to close. A good engineer can implement with confidence.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\subsection{Formal Definitions (Reference)}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+For completeness, the formal definitions used in Lean proofs.
+
+\begin{definition}[Decomposed Operator]
+$F(S) = B \cup \mathsf{step}(S)$ where $\mathsf{step}$ is monotone.
+\end{definition}
+
+\begin{definition}[Rank]
+$\mathsf{rank}(x) = \min \{ n \mid x \in F^n(\emptyset) \}$.
+\end{definition}
+
+\begin{definition}[Well-Founded Derivation]
+$y$ wf-derives $x$ if $\mathsf{rank}(y) < \mathsf{rank}(x)$ and $x \in \mathsf{step}(\{y\})$.
+\end{definition}
+
+\begin{definition}[Semi-Naive Iteration]
+$C_0 = I$, $\Delta_0 = I$, $\Delta_{n+1} = \mathsf{step}(\Delta_n) \setminus C_n$, $C_{n+1} = C_n \cup \Delta_{n+1}$.
+\end{definition}
+
+\begin{definition}[Well-Founded Cascade]
+$K_0 = I$, $K_{n+1} = K_n \setminus \{ x \mid x \notin B \land \text{no wf-deriver in } K_n \}$.
+\end{definition}
 
 \section{Level 2: DSL with Automatic Derivation (Future)}
 
