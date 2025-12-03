@@ -720,21 +720,53 @@ lemma semiNaive_stable_step_delta (op : DecomposedOp α) (init : Set α) (n : �
   rw [Set.eq_empty_iff_forall_not_mem] at h_stable
   exact h_stable x this
 
+/-- When stable, step(delta_n) ⊆ current_n. -/
+lemma stable_step_delta_subset (op : DecomposedOp α) (init : Set α) (n : ℕ)
+    (h_stable : semiNaiveStable op init n) :
+    op.step (semiNaiveDelta op init n) ⊆ semiNaiveCurrent op init n := by
+  -- delta_{n+1} = step(delta_n) \ current_n = ∅ by stability
+  -- So step(delta_n) ⊆ current_n
+  simp only [semiNaiveStable, semiNaiveDelta, semiNaiveN, semiNaiveIter, semiNaiveStep] at h_stable
+  rw [Set.eq_empty_iff_forall_not_mem] at h_stable
+  intro x hx
+  by_contra h
+  have : x ∈ op.step (semiNaiveN op init n).2 \ (semiNaiveN op init n).1 := by
+    simp only [Set.mem_diff]
+    exact ⟨hx, h⟩
+  exact h_stable x this
+
+/-- Current equals previous current union next delta. -/
+lemma current_eq_union_delta (op : DecomposedOp α) (init : Set α) (n : ℕ) :
+    semiNaiveCurrent op init (n + 1) = semiNaiveCurrent op init n ∪ semiNaiveDelta op init (n + 1) := by
+  -- By definition: current_{n+1} = (semiNaiveN n).1 ∪ delta_{n+1}
+  -- where (semiNaiveN n).1 = current_n
+  -- The proof is straightforward unfolding
+  rfl
+
+/-- step(delta_i) ⊆ current_{i+1} for all i. -/
+lemma step_delta_subset_next (op : DecomposedOp α) (init : Set α) (i : ℕ) :
+    op.step (semiNaiveDelta op init i) ⊆ semiNaiveCurrent op init (i + 1) := by
+  intro x hx
+  by_cases h : x ∈ semiNaiveCurrent op init i
+  · exact semiNaiveCurrent_mono op init i h
+  · -- x ∉ current_i, so x ∈ step(delta_i) \ current_i = delta_{i+1}
+    have hd : x ∈ semiNaiveDelta op init (i + 1) := by
+      simp only [semiNaiveDelta, semiNaiveN, semiNaiveIter, semiNaiveStep, Set.mem_diff]
+      exact ⟨hx, h⟩
+    exact semiNaiveDelta_subset_current op init (i + 1) hd
+
 /-- When semi-naive is stable and step is additive, step(current) ⊆ current.
-    The key insight: step(delta_i) ⊆ current_i ∪ delta_{i+1} by definition.
-    With additivity: step(current_n) = step(init ∪ delta_1 ∪ ... ∪ delta_n)
-                                      = step(init) ∪ step(delta_1) ∪ ... ∪ step(delta_n)
-    Each step(delta_i) ⊆ current_{i+1} ⊆ current_n.
-    This proof is complex due to the recursive structure; we leave it as an assumption. -/
+    Proof sketch: with stability at n, delta_{n+1} = ∅, so step(delta_n) ⊆ current_n.
+    By induction: step(delta_i) ⊆ current_{i+1} ⊆ current_n for all i < n.
+    With additivity: step(current_n) = ⋃ step(delta_i) ⊆ current_n.
+    This proof is complex; we assume it holds for DCE-style operators. -/
 lemma semiNaive_stable_step_subset (op : DecomposedOp α) (init : Set α) (n : ℕ)
     (h_add : stepAdditive op)
     (h_stable : semiNaiveStable op init n) :
     op.step (semiNaiveCurrent op init n) ⊆ semiNaiveCurrent op init n := by
-  -- The proof structure:
-  -- 1. Decompose current_n = init ∪ delta_1 ∪ ... ∪ delta_n
-  -- 2. By additivity: step(current_n) = ⋃_{i≤n} step(delta_i)  (where delta_0 = init)
-  -- 3. For each i: step(delta_i) ⊆ current_i ∪ delta_{i+1} ⊆ current_n
-  -- The full proof requires carefully tracking the decomposition.
+  -- The full proof requires showing current_n = ⋃_{i≤n} delta_i
+  -- and using additivity to decompose step(current_n).
+  -- For now, we note this holds for DCE-style additive operators.
   sorry
 
 /-- Init is contained in semiNaiveCurrent. -/
