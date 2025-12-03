@@ -106,48 +106,34 @@ The state maintained by Layer~2 consists of:
   \item $\mathsf{refcount} : \mathsf{Node} \to \mathbb{N}$: for each node $v$, the count of incoming edges from live nodes.
 \end{itemize}
 
+We present simplified algorithms that inline the BFS propagation and use explicit notation for the updated graph $G' = G \pm f$.
+
 \subsection{Adding a Fragment}
 
-When a fragment $f = (\mathsf{nodes}_f, \mathsf{roots}_f, \mathsf{edges}_f)$ is added:
+When a fragment $f = (\mathsf{nodes}_f, \mathsf{roots}_f, \mathsf{edges}_f)$ is added, the graph becomes $G' = G \oplus f$:
 
 \begin{algorithm}[H]
 \caption{AddFragment($f$)}
 \begin{algorithmic}[1]
-\State \textbf{precondition:} $\mathsf{live} = \mathsf{liveSet}(G)$ and $\mathsf{refcount} = \mathsf{refcountSpec}(G)$
-\State $\mathsf{frontier} \gets \emptyset$
-\Comment{Nodes to propagate liveness from}
-\For{each $r \in \mathsf{roots}_f$}
-  \Comment{\textbf{inv:} $\mathsf{frontier}$ = processed new roots not yet live}
-  \If{$r \notin \mathsf{live}$}
-    \State $\mathsf{frontier} \gets \mathsf{frontier} \cup \{r\}$
-  \EndIf
-\EndFor
+\State \textbf{precondition:} $\mathsf{live} = \mathsf{liveSet}(G)$, $\mathsf{refcount} = \mathsf{refcountSpec}(G)$
+\State $G' \gets G \oplus f$
+\Comment{Layer~1 applies the delta}
+\Statex
+\State \Comment{\textbf{Phase 1:} Update refcounts for new edges from already-live sources}
 \For{each $(u, v) \in \mathsf{edges}_f$}
-  \Comment{\textbf{inv:} refcounts updated for processed edges from live sources}
   \If{$u \in \mathsf{live}$}
     \State $\mathsf{refcount}[v] \gets \mathsf{refcount}[v] + 1$
-    \If{$v \notin \mathsf{live}$}
-      \State $\mathsf{frontier} \gets \mathsf{frontier} \cup \{v\}$
-    \EndIf
   \EndIf
 \EndFor
-\State \Call{PropagateLiveness}{$\mathsf{frontier}$}
-\end{algorithmic}
-\end{algorithm}
-
-\begin{algorithm}[H]
-\caption{PropagateLiveness($\mathsf{frontier}$)}
-\begin{algorithmic}[1]
-\State $Q \gets \mathsf{frontier}$
-\Comment{BFS queue}
+\Statex
+\State \Comment{\textbf{Phase 2:} BFS expansion from frontier}
+\State $Q \gets \{r \in \mathsf{roots}_f \mid r \notin \mathsf{live}\}
+         \cup \{v \mid \exists u.\, (u,v) \in \mathsf{edges}_f \land u \in \mathsf{live} \land v \notin \mathsf{live}\}$
 \While{$Q \neq \emptyset$}
-  \Statex \Comment{\textbf{inv:} $\mathsf{live} \cup Q \supseteq$ nodes reachable from $\mathsf{frontier}$}
-  \Statex \Comment{\textbf{inv:} $\forall v \in \mathsf{live}.\; \mathsf{refcount}$ includes $v$'s outgoing edges}
   \State $v \gets Q.\mathsf{dequeue}()$
   \If{$v \notin \mathsf{live}$}
     \State $\mathsf{live} \gets \mathsf{live} \cup \{v\}$
-    \For{each $(v, w) \in G.\mathsf{edges}$}
-    \Comment{All outgoing edges}
+    \For{each $(v, w) \in G'.\mathsf{edges}$}
       \State $\mathsf{refcount}[w] \gets \mathsf{refcount}[w] + 1$
       \If{$w \notin \mathsf{live}$}
         \State $Q.\mathsf{enqueue}(w)$
@@ -155,67 +141,48 @@ When a fragment $f = (\mathsf{nodes}_f, \mathsf{roots}_f, \mathsf{edges}_f)$ is 
     \EndFor
   \EndIf
 \EndWhile
-\State \textbf{postcondition:} $\mathsf{live}$ includes closure of $\mathsf{frontier}$; refcounts updated
+\State \textbf{postcondition:} $\mathsf{live} = \mathsf{liveSet}(G')$, $\mathsf{refcount} = \mathsf{refcountSpec}(G')$
 \end{algorithmic}
 \end{algorithm}
 
 \subsection{Removing a Fragment}
 
-When a fragment $f$ is removed, we must handle cascading deaths:
+When a fragment $f$ is removed, the graph becomes $G' = G \ominus f$:
 
 \begin{algorithm}[H]
 \caption{RemoveFragment($f$)}
 \begin{algorithmic}[1]
-\State \textbf{precondition:} $\mathsf{live} = \mathsf{liveSet}(G)$ and $\mathsf{refcount} = \mathsf{refcountSpec}(G)$
-\State $\mathsf{cascade} \gets \emptyset$
-\Comment{Nodes that may become dead}
+\State \textbf{precondition:} $\mathsf{live} = \mathsf{liveSet}(G)$, $\mathsf{refcount} = \mathsf{refcountSpec}(G)$
+\State $G' \gets G \ominus f$
+\Comment{Layer~1 applies the delta}
+\Statex
+\State \Comment{\textbf{Phase 1:} Update refcounts for removed edges from live sources}
 \For{each $(u, v) \in \mathsf{edges}_f$}
-  \Comment{\textbf{inv:} refcounts decremented for processed removed edges}
   \If{$u \in \mathsf{live}$}
     \State $\mathsf{refcount}[v] \gets \mathsf{refcount}[v] - 1$
-    \If{$\mathsf{refcount}[v] = 0 \land v \notin (G.\mathsf{roots} - \mathsf{roots}_f)$}
-      \State $\mathsf{cascade} \gets \mathsf{cascade} \cup \{v\}$
-    \EndIf
   \EndIf
 \EndFor
-\For{each $r \in \mathsf{roots}_f$}
-  \Comment{\textbf{inv:} processed removed roots with refcount $0$ in cascade}
-  \If{$r \in \mathsf{live} \land r \notin (G.\mathsf{roots} - \mathsf{roots}_f)$}
-    \If{$\mathsf{refcount}[r] = 0$}
-      \State $\mathsf{cascade} \gets \mathsf{cascade} \cup \{r\}$
-    \EndIf
-  \EndIf
-\EndFor
-\State \Call{CascadeDeath}{$\mathsf{cascade}$}
-\end{algorithmic}
-\end{algorithm}
-
-\begin{algorithm}[H]
-\caption{CascadeDeath($\mathsf{cascade}$)}
-\begin{algorithmic}[1]
-\State $Q \gets \mathsf{cascade}$
+\Statex
+\State \Comment{\textbf{Phase 2:} Cascade from nodes that may have become dead}
+\State $Q \gets \{v \in \mathsf{live} \mid \mathsf{refcount}[v] = 0 \land v \notin G'.\mathsf{roots}\}$
 \While{$Q \neq \emptyset$}
-  \Statex \Comment{\textbf{inv:} $\mathsf{live} \supseteq \mathsf{liveSet}(G')$ (live only shrinks toward spec)}
-  \Statex \Comment{\textbf{inv:} nodes in $Q$ have refcount $0$ and may need removal}
-  \Statex \Comment{\textbf{inv:} for removed nodes, successors' refcounts decremented}
   \State $v \gets Q.\mathsf{dequeue}()$
-  \If{$v \in \mathsf{live} \land \mathsf{refcount}[v] = 0 \land v \notin G.\mathsf{roots}$}
+  \If{$v \in \mathsf{live} \land \mathsf{refcount}[v] = 0 \land v \notin G'.\mathsf{roots}$}
     \State $\mathsf{live} \gets \mathsf{live} \setminus \{v\}$
-    \For{each $(v, w) \in G.\mathsf{edges}$}
-    \Comment{Decrement successors}
+    \For{each $(v, w) \in G'.\mathsf{edges}$}
       \State $\mathsf{refcount}[w] \gets \mathsf{refcount}[w] - 1$
-      \If{$\mathsf{refcount}[w] = 0 \land w \notin G.\mathsf{roots}$}
+      \If{$\mathsf{refcount}[w] = 0 \land w \notin G'.\mathsf{roots}$}
         \State $Q.\mathsf{enqueue}(w)$
       \EndIf
     \EndFor
   \EndIf
 \EndWhile
-\State \textbf{postcondition:} all unreachable nodes removed from $\mathsf{live}$
+\State \textbf{postcondition:} $\mathsf{live} = \mathsf{liveSet}(G')$, $\mathsf{refcount} = \mathsf{refcountSpec}(G')$
 \end{algorithmic}
 \end{algorithm}
 
 \paragraph{Correctness invariant.}
-Let $G$ denote the current aggregated graph state (after Layer~1 applies the fragment delta).
+Let $G$ denote the current aggregated graph state (after Layer~1 applies the fragment delta), i.e.\ the graph denoted $G'$ in the pseudocode above.
 After each call to \textsc{AddFragment} or \textsc{RemoveFragment}, the algorithm state $(\mathsf{live}, \mathsf{refcount})$ should satisfy:
 \[
   \mathsf{live} = \{v \mid v \text{ is reachable from } G.\mathsf{roots} \text{ via } G.\mathsf{edges}\}
