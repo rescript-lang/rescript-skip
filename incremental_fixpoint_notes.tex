@@ -128,10 +128,56 @@ $\mathsf{rank} : \mathsf{Map}(A, \mathbb{N})$ & BFS distance from base & for con
 
 \subsubsection{Required Properties}
 
+\paragraph{User Obligations (Low-Level API)}
+
+The low-level API requires the user to provide $\mathsf{stepFwd}$ and manage deltas explicitly.
+The correctness of the algorithms depends on the following guarantees:
+
 \begin{enumerate}
-\item \textbf{stepInv correctness} (if provided): $y \in \mathsf{stepInv}(x) \Leftrightarrow x \in \mathsf{stepFwd}(y)$
-\item \textbf{Element-wise} (automatic): $\mathsf{step}$ decomposes via $\mathsf{stepFwd}$
-\item \textbf{Additive} (automatic): $\mathsf{step}(A \cup B) = \mathsf{step}(A) \cup \mathsf{step}(B)$
+\item \textbf{stepFwd stability}: During any single API call (\textsf{make} or \textsf{applyDelta}), 
+      $\mathsf{stepFwd}(x)$ must return consistent results for any $x$. 
+      This ensures the operator $F$ is well-defined.
+      
+      \emph{Violation example}: If $\mathsf{stepFwd}$ reads from mutable external state 
+      that changes during an operation, the algorithm may produce incorrect results.
+
+\item \textbf{Delta accuracy} (low-level API only): When using \textsf{applyDelta}, 
+      the delta must accurately describe changes to the step relation. Specifically:
+      \begin{itemize}
+      \item $\mathsf{addedToStep}$ must list pairs $(x, y)$ where $y$ is now in $\mathsf{stepFwd}(x)$ but wasn't before
+      \item $\mathsf{removedFromStep}$ must list pairs $(x, y)$ where $y$ was in $\mathsf{stepFwd}(x)$ but no longer is
+      \item $\mathsf{stepFwd}$ must already reflect the new state when \textsf{applyDelta} is called
+      \end{itemize}
+      
+\end{enumerate}
+
+\paragraph{Managed API (No User Obligations)}
+
+A managed API can eliminate \emph{both} user obligations by:
+\begin{itemize}
+\item Owning the step relation as explicit data (not a user-provided function)
+\item Computing $\mathsf{stepFwd}$ internally from its own state
+\item Automatically computing deltas when the user calls mutation methods
+\end{itemize}
+With a managed API, the user simply calls methods like $\mathsf{addToStep}(x, y)$ and 
+$\mathsf{removeFromStep}(x, y)$, and correctness is guaranteed by construction.
+
+\paragraph{Automatic Properties}
+
+Given the user obligations above, the following properties hold by construction:
+
+\begin{enumerate}
+\item \textbf{Monotonicity}: $F$ is monotone because $\mathsf{step}(S) = \bigcup_{x \in S} \mathsf{stepFwd}(x)$ 
+      is a union over $S$, which is monotone in $S$.
+
+\item \textbf{stepInv correctness}: If $\mathsf{stepInv}$ is computed by the system from $\mathsf{stepFwd}$
+      (rather than user-provided), correctness is guaranteed:
+      $y \in \mathsf{stepInv}(x) \Leftrightarrow x \in \mathsf{stepFwd}(y)$.
+
+\item \textbf{Element-wise decomposition}: By definition, $\mathsf{step}$ decomposes via $\mathsf{stepFwd}$.
+
+\item \textbf{Additivity}: Follows from element-wise decomposition:
+      $\mathsf{step}(A \cup B) = \mathsf{step}(A) \cup \mathsf{step}(B)$.
 \end{enumerate}
 
 \begin{example}[DCE Instance]
