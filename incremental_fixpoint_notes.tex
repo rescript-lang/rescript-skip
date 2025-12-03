@@ -70,6 +70,17 @@ Compute $S' = \mathsf{lfp}(F')$ efficiently, in time proportional to $|S' \trian
 \subsection{API Specification}
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+\begin{remark}[Two API Levels]
+The API has two levels depending on which operations are needed:
+\begin{itemize}
+\item \textbf{Simple API} (expansion only): Supports adding elements to base or edges.
+      Requires only $\mathsf{base}$ and $\mathsf{stepFwd}$.
+\item \textbf{Full API} (expansion + contraction): Also supports removing elements.
+      Additionally requires $\mathsf{stepInv}$ and $\mathsf{rank}$.
+\end{itemize}
+Many applications only need expansion (e.g., monotonically growing graphs). The simple API suffices and is easier to implement.
+\end{remark}
+
 \subsubsection{Types}
 
 \begin{center}
@@ -83,31 +94,37 @@ $\mathsf{Map}(A, \mathbb{N})$ & Map from elements to natural numbers (ranks)
 \subsubsection{Configuration (User Provides)}
 
 \begin{center}
-\begin{tabular}{lp{8cm}}
-$\mathsf{base} : \mathsf{Set}(A)$ & Seed elements (e.g., roots in DCE) \\
-$\mathsf{stepFwd} : A \to \mathsf{Set}(A)$ & Forward derivation: elements derived from one element \\
-$\mathsf{stepInv} : A \to \mathsf{Set}(A)$ & Inverse: elements that derive a given element
+\begin{tabular}{lp{6.5cm}l}
+$\mathsf{base} : \mathsf{Set}(A)$ & Seed elements (e.g., roots) & required \\
+$\mathsf{stepFwd} : A \to \mathsf{Set}(A)$ & Forward derivation & required \\
+$\mathsf{stepInv} : A \to \mathsf{Set}(A)$ & Inverse derivation & for contraction
 \end{tabular}
 \end{center}
 
 \medskip
 \noindent Define $\mathsf{step}(S) = \bigcup_{x \in S} \mathsf{stepFwd}(x)$ and $F(S) = \mathsf{base} \cup \mathsf{step}(S)$.
 
+\medskip
+\noindent \textbf{Note:} If $\mathsf{stepInv}$ is not provided, the system can build it from $\mathsf{stepFwd}$:
+\[
+\mathsf{stepInv}[y] = \{ x \in \mathsf{current} \mid y \in \mathsf{stepFwd}(x) \}
+\]
+This is computed once during initialization and maintained incrementally.
+
 \subsubsection{State (System Maintains)}
 
 \begin{center}
-\begin{tabular}{lp{8cm}}
-$\mathsf{current} : \mathsf{Set}(A)$ & Current live set $= \mathsf{lfp}(F)$ \\
-$\mathsf{rank} : \mathsf{Map}(A, \mathbb{N})$ & Rank of each element (BFS distance from base)
+\begin{tabular}{lp{6.5cm}l}
+$\mathsf{current} : \mathsf{Set}(A)$ & Current live set $= \mathsf{lfp}(F)$ & always \\
+$\mathsf{rank} : \mathsf{Map}(A, \mathbb{N})$ & BFS distance from base & for contraction
 \end{tabular}
 \end{center}
 
 \subsubsection{Required Properties}
 
-The user must ensure:
 \begin{enumerate}
-\item \textbf{stepInv correctness:} $y \in \mathsf{stepInv}(x) \Leftrightarrow x \in \mathsf{stepFwd}(y)$
-\item \textbf{Element-wise} (automatic): $\mathsf{step}$ decomposes per-element via $\mathsf{stepFwd}$
+\item \textbf{stepInv correctness} (if provided): $y \in \mathsf{stepInv}(x) \Leftrightarrow x \in \mathsf{stepFwd}(y)$
+\item \textbf{Element-wise} (automatic): $\mathsf{step}$ decomposes via $\mathsf{stepFwd}$
 \item \textbf{Additive} (automatic): $\mathsf{step}(A \cup B) = \mathsf{step}(A) \cup \mathsf{step}(B)$
 \end{enumerate}
 
@@ -115,7 +132,7 @@ The user must ensure:
 \begin{align*}
 \mathsf{base} &= \mathsf{roots} \\
 \mathsf{stepFwd}(u) &= \{ v \mid (u, v) \in \mathsf{edges} \} \quad \text{(successors)} \\
-\mathsf{stepInv}(v) &= \{ u \mid (u, v) \in \mathsf{edges} \} \quad \text{(predecessors)}
+\mathsf{stepInv}(v) &= \{ u \mid (u, v) \in \mathsf{edges} \} \quad \text{(predecessors, optional)}
 \end{align*}
 \end{example}
 
