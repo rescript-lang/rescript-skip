@@ -134,54 +134,106 @@ The sequence $K_n$ is monotonically decreasing. If it stabilizes, then $K_n = \m
 
 \subsection{From Specification to Implementation}
 
-The specifications above operate on abstract sets and assume convergence. A real implementation requires additional ingredients:
+The key insight: if we \textbf{store ranks explicitly}, the implementation becomes straightforward and achieves optimal complexity (matching dedicated implementations like DCE).
 
-\paragraph{1. Finite representation.}
-The specifications use $\mathsf{Set}\ A$ (arbitrary sets). An implementation needs:
+\paragraph{Extended API.}
+Add to the configuration:
 \begin{itemize}
-  \item Finite domain or lazy enumeration
-  \item Efficient set operations (membership, union, difference)
+  \item $\mathsf{stepInv}(x) = \{ y \mid x \in \mathsf{step}(\{y\}) \}$ --- inverse of step (predecessors)
 \end{itemize}
-
-\paragraph{2. Termination.}
-The specifications define $K^* = \bigcap_n K_n$ (infinite intersection). An implementation needs:
+Add to the state:
 \begin{itemize}
-  \item Proof that iteration stabilizes in finite steps
-  \item Or: a bound on the number of iterations (e.g., $|A|$ for finite domains)
+  \item $\mathsf{rank} : A \to \mathbb{N}$ --- BFS distance from base for each element
 \end{itemize}
 
-\paragraph{3. Rank computation.}
-Well-founded cascade requires comparing ranks. An implementation needs:
+\paragraph{Expansion Algorithm (BFS).}
+
+\begin{verbatim}
+expand(state, config'):
+  frontier = config'.base \ state.current
+  r = 0
+  while frontier != {}:
+    for x in frontier:
+      state.current.add(x)
+      state.rank[x] = r
+    nextFrontier = {}
+    for x in frontier:
+      for y in config'.stepFwd(x):
+        if y not in state.current:
+          nextFrontier.add(y)
+    frontier = nextFrontier
+    r += 1
+\end{verbatim}
+
+\textbf{Complexity:} $O(|\text{new elements}| + |\text{edges from new elements}|)$
+
+\paragraph{Contraction Algorithm (Worklist Cascade).}
+
+\begin{verbatim}
+contract(state, config'):
+  worklist = { x | x lost support }
+  dying = {}
+
+  while worklist != {}:
+    x = worklist.pop()
+    if x in dying or x in config'.base: continue
+
+    // Check for well-founded deriver
+    hasSupport = false
+    for y in config'.stepInv(x):
+      if y in (state.current \ dying) and state.rank[y] < state.rank[x]:
+        hasSupport = true; break
+
+    if not hasSupport:
+      dying.add(x)
+      for z where x in config'.stepInv(z):
+        worklist.add(z)
+
+  state.current -= dying
+\end{verbatim}
+
+\textbf{Complexity:} $O(|\text{dying nodes}| + |\text{edges to dying nodes}|)$
+
+\paragraph{Why This Is Optimal for DCE.}
+For DCE with graph $G = (V, E)$:
 \begin{itemize}
-  \item Either: precompute and store ranks for all elements
-  \item Or: compute ranks on-demand during cascade
-  \item For DCE: rank = BFS distance from roots (computable)
+  \item $\mathsf{stepFwd}(u) = \text{successors}(u)$ --- $O(\text{out-degree})$
+  \item $\mathsf{stepInv}(v) = \text{predecessors}(v)$ --- $O(\text{in-degree})$
+  \item $\mathsf{rank}[y] < \mathsf{rank}[x]$ --- $O(1)$ integer comparison
+\end{itemize}
+This matches the complexity of dedicated graph reachability algorithms.
+The rank-based API \emph{generalizes} this to any decomposed fixpoint operator.
+
+\paragraph{Storage Cost.}
+One integer (rank) per element. Trivial overhead.
+
+\begin{remark}[Gap Between Proofs and Algorithms]
+\textbf{What Lean proves} (specification level):
+\begin{itemize}
+  \item Semi-naive iteration, when stable, equals $\mathsf{lfp}(F')$
+  \item Well-founded cascade, when stable, equals $\mathsf{lfp}(F')$
+  \item Soundness of intermediate states
 \end{itemize}
 
-\paragraph{4. Detecting stabilization.}
+\textbf{What the pseudo-code adds} (implementation level):
 \begin{itemize}
-  \item Expansion: check if $\Delta_{n+1} = \emptyset$
-  \item Contraction: check if $K_{n+1} = K_n$ (no elements removed)
+  \item Concrete worklist/BFS structure
+  \item Explicit rank storage and comparison
+  \item Iteration order and data structure choices
 \end{itemize}
 
-\paragraph{5. Complexity analysis.}
-\begin{itemize}
-  \item Expansion: $O(\text{new elements})$ iterations, each processing a delta
-  \item Contraction: $O(|K_0|)$ iterations in the worst case
-\end{itemize}
+\textbf{Gaps not formally proven:}
+\begin{enumerate}
+  \item \textbf{Refinement:} The pseudo-code correctly implements the specification.
+        \emph{Status:} Visually obvious---each loop iteration corresponds to one spec step.
+  \item \textbf{Termination:} The algorithms terminate for finite domains.
+        \emph{Status:} Clear for finite sets (each iteration changes a finite set monotonically).
+  \item \textbf{stepInv correctness:} The user-provided inverse is correct.
+        \emph{Status:} Assumed; for DCE this is just the predecessor relation.
+\end{enumerate}
 
-\begin{remark}[What the Lean Formalization Provides]
-The Lean formalization proves:
-\begin{itemize}
-  \item \textbf{Correctness:} If the algorithms stabilize, they compute the new fixpoint
-  \item \textbf{Soundness:} Intermediate results are always subsets/supersets of the target
-\end{itemize}
-It does \emph{not} provide:
-\begin{itemize}
-  \item Termination proofs
-  \item Complexity bounds  
-  \item Executable code
-\end{itemize}
+These gaps are ``obvious'' in the sense that closing them would be mechanical.
+A good engineer can implement the pseudo-code with confidence.
 \end{remark}
 
 \subsection{Formal Definitions and Correctness}

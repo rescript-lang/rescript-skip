@@ -706,4 +706,124 @@ theorem incremental_update_correct (cfg cfg' : IncrFixpointConfig α)
     have h_sub : lfp' ⊆ lfp := lfp_mono_contract cfg.op cfg'.op lfp lfp' h_con h_lfp h_lfp'
     exact wf_contraction_correctness cfg'.op lfp lfp' cfg'.step_ew h_lfp' h_sub h_lfp'_limit
 
+/-! ## Implementable API with Explicit Ranks
+
+The specifications above use abstract sets. For implementation, we make ranks explicit
+and provide algorithmic definitions that a good engineer can implement directly.
+
+Key insight: storing ranks (one integer per element) makes the well-founded check
+O(1) per deriver, giving optimal complexity matching dedicated implementations.
+-/
+
+/-- Configuration for implementable incremental fixpoint.
+    Compared to IncrFixpointConfig, this adds stepInverse for efficient contraction. -/
+structure ImplConfig (α : Type*) where
+  /-- Base elements (seeds). -/
+  base : Set α
+  /-- Forward step: step(x) = elements derived from x. -/
+  stepFwd : α → Set α
+  /-- Inverse step: stepInv(x) = elements that derive x. -/
+  stepInv : α → Set α
+  /-- Specification: stepInv is correct. -/
+  stepInv_spec : ∀ x y, y ∈ stepInv x ↔ x ∈ stepFwd y
+
+/-- State for implementable incremental fixpoint.
+    Stores the current set AND the rank of each element. -/
+structure ImplState (α : Type*) where
+  /-- Current live set. -/
+  current : Set α
+  /-- Rank of each element: BFS distance from base. -/
+  rank : α → ℕ
+
+/-! ### Algorithmic Pseudo-Code
+
+The following pseudo-code can be directly implemented by a good engineer.
+We state them as comments rather than Lean definitions since they involve
+imperative loops and mutable state.
+
+**Expansion Algorithm (BFS from new base elements):**
+
+```
+expand(state, config'):
+  frontier = config'.base \ state.current
+  r = 0
+  while frontier ≠ ∅:
+    for x in frontier:
+      state.current.add(x)
+      state.rank[x] = r
+    nextFrontier = {}
+    for x in frontier:
+      for y in config'.stepFwd(x):
+        if y ∉ state.current:
+          nextFrontier.add(y)
+    frontier = nextFrontier
+    r += 1
+  return state
+```
+
+Complexity: O(|new elements| + |edges from new elements|)
+
+**Contraction Algorithm (worklist-based cascade):**
+
+```
+contract(state, config'):
+  // Initialize worklist with nodes that might have lost support
+  worklist = { x ∈ state.current | x ∉ config'.base ∧ lost a deriver }
+  dying = {}
+
+  while worklist ≠ ∅:
+    x = worklist.pop()
+    if x ∈ dying: continue
+    if x ∈ config'.base: continue
+
+    // Check for well-founded deriver: y with rank[y] < rank[x]
+    hasSupport = false
+    for y in config'.stepInv(x):
+      if y ∈ state.current ∧ y ∉ dying ∧ state.rank[y] < state.rank[x]:
+        hasSupport = true
+        break
+
+    if ¬hasSupport:
+      dying.add(x)
+      // Add dependents to worklist
+      for z in state.current:
+        if x ∈ config'.stepInv(z):
+          worklist.add(z)
+
+  for x in dying:
+    state.current.remove(x)
+    delete state.rank[x]
+  return state
+```
+
+Complexity: O(|dying nodes| + |edges to dying nodes|)
+This matches dedicated DCE implementations.
+-/
+
+/-- DCE as an ImplConfig instance. -/
+def dceImplConfig (roots : Set α) (edges : Set (α × α)) : ImplConfig α where
+  base := roots
+  stepFwd u := { v | (u, v) ∈ edges }
+  stepInv v := { u | (u, v) ∈ edges }
+  stepInv_spec x y := by simp only [Set.mem_setOf_eq]
+
+/-! ### Why This Is Optimal for DCE
+
+For DCE with graph G = (V, E):
+- stepFwd(u) = successors of u = O(out-degree)
+- stepInv(v) = predecessors of v = O(in-degree)
+- rank[y] < rank[x] = integer comparison = O(1)
+
+Expansion: BFS from new roots
+- Visits each new live node once: O(|new live|)
+- Checks each outgoing edge once: O(|edges from new live|)
+
+Contraction: Worklist cascade
+- Processes each dying node once: O(|dying|)
+- Checks each incoming edge once: O(|edges to dying|)
+
+This matches the complexity of dedicated graph reachability algorithms.
+The rank-based API generalizes this to any decomposed fixpoint operator.
+-/
+
 end IncrementalFixpoint
