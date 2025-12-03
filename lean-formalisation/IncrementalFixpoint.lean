@@ -198,6 +198,37 @@ The key insight: with well-founded ranking, cycles don't provide support
 because cycle members have equal rank (or no rank), not strictly lower rank.
 -/
 
+/-- Helper: find the first step where x appears. -/
+lemma exists_first_appearance (op : DecomposedOp α) (x : α) (n : ℕ)
+    (hn : x ∈ iterF op n) :
+    ∃ m ≤ n, firstAppears op x m := by
+  induction n with
+  | zero => simp [iterF] at hn
+  | succ n ih =>
+    by_cases hprev : x ∈ iterF op n
+    · obtain ⟨m, hm_le, hm_first⟩ := ih hprev
+      exact ⟨m, Nat.le_succ_of_le hm_le, hm_first⟩
+    · -- x first appears at n+1
+      use n + 1
+      constructor
+      · exact Nat.le_refl _
+      · simp only [firstAppears]
+        constructor
+        · exact hn
+        · right; simp only [Nat.add_sub_cancel]; exact hprev
+
+/-- If x first appears at m+1, then x has a deriver in iterF(m). -/
+lemma first_appearance_has_deriver (op : DecomposedOp α) (h_ew : stepElementWise op)
+    (x : α) (m : ℕ) (hfirst : firstAppears op x (m + 1)) (hnotbase : x ∉ op.base) :
+    ∃ y ∈ iterF op m, x ∈ op.step {y} := by
+  simp only [firstAppears] at hfirst
+  obtain ⟨hx_in, hprev⟩ := hfirst
+  cases hprev with
+  | inl h => omega  -- m+1 ≠ 0
+  | inr hnotin =>
+    simp only [Nat.add_sub_cancel] at hnotin
+    exact iterF_has_wf_deriver op h_ew x m hx_in hnotin hnotbase
+
 /-- Elements of iterFLimit have well-founded derivers (for non-base elements).
     This is the key property that enables completeness. -/
 lemma iterFLimit_has_wf_deriver (op : DecomposedOp α) (h_ew : stepElementWise op)
@@ -206,29 +237,26 @@ lemma iterFLimit_has_wf_deriver (op : DecomposedOp α) (h_ew : stepElementWise o
   -- x ∈ iterFLimit means ∃n. x ∈ iterF(n)
   simp only [iterFLimit, Set.mem_iUnion] at hx
   obtain ⟨n, hn⟩ := hx
-  -- Find the first n where x appears
-  -- x must appear at some n > 0 since x ∉ base and iterF(0) = ∅
-  cases n with
-  | zero => simp [iterF] at hn
-  | succ n =>
-    -- x ∈ iterF(n+1). Either x ∈ iterF(n) or x first appears at n+1
-    by_cases hprev : x ∈ iterF op n
-    · -- x was already in iterF(n), recurse (well-founded on n)
-      sorry -- This case needs well-founded recursion on n
-    · -- x first appears at n+1
-      -- By iterF_has_wf_deriver, ∃y ∈ iterF(n). x ∈ step({y})
-      obtain ⟨y, hy_in, hy_derives⟩ := iterF_has_wf_deriver op h_ew x n hn hprev hnotbase
-      -- y has strictly lower rank than x (y appears at ≤n, x at n+1)
-      use y
-      constructor
-      · exact iterF_subset_limit op n hy_in
-      · constructor
-        · -- rankLt op y x
-          simp only [rankLt, firstAppears]
-          -- y ∈ iterF(n), x first appears at n+1
-          -- Need to find ny ≤ n where y first appears
-          sorry
-        · exact hy_derives
+  -- Find the first appearance of x
+  obtain ⟨m, _, hm_first⟩ := exists_first_appearance op x n hn
+  -- m must be > 0 since x ∉ base and iterF(0) = ∅
+  cases m with
+  | zero =>
+    simp only [firstAppears, iterF] at hm_first
+    exact absurd hm_first.1 (Set.not_mem_empty x)
+  | succ m =>
+    -- x first appears at m+1, so ∃y ∈ iterF(m). x ∈ step({y})
+    obtain ⟨y, hy_in, hy_derives⟩ := first_appearance_has_deriver op h_ew x m hm_first hnotbase
+    -- Find the first appearance of y
+    obtain ⟨my, hmy_le, hmy_first⟩ := exists_first_appearance op y m hy_in
+    use y
+    constructor
+    · exact iterF_subset_limit op m hy_in
+    · constructor
+      · -- rankLt op y x: y first appears at my ≤ m < m+1 where x first appears
+        simp only [rankLt]
+        exact ⟨my, m + 1, hmy_first, hm_first, Nat.lt_succ_of_le hmy_le⟩
+      · exact hy_derives
 
 /-- Elements of lfp' survive well-founded cascade from lfp.
     Key: lfp' elements have well-founded derivers within lfp'. -/
@@ -693,14 +721,20 @@ lemma semiNaive_stable_step_delta (op : DecomposedOp α) (init : Set α) (n : �
   exact h_stable x this
 
 /-- When semi-naive is stable and step is additive, step(current) ⊆ current.
-    The proof uses additivity to decompose step(current) into step(delta_i)'s,
-    each of which is ⊆ current by the structure of semi-naive iteration. -/
+    The key insight: step(delta_i) ⊆ current_i ∪ delta_{i+1} by definition.
+    With additivity: step(current_n) = step(init ∪ delta_1 ∪ ... ∪ delta_n)
+                                      = step(init) ∪ step(delta_1) ∪ ... ∪ step(delta_n)
+    Each step(delta_i) ⊆ current_{i+1} ⊆ current_n.
+    This proof is complex due to the recursive structure; we leave it as an assumption. -/
 lemma semiNaive_stable_step_subset (op : DecomposedOp α) (init : Set α) (n : ℕ)
     (h_add : stepAdditive op)
     (h_stable : semiNaiveStable op init n) :
     op.step (semiNaiveCurrent op init n) ⊆ semiNaiveCurrent op init n := by
-  -- The full proof requires decomposing current_n as init ∪ delta_1 ∪ ... ∪ delta_n
-  -- and using additivity. For now, we note this holds for DCE-style functions.
+  -- The proof structure:
+  -- 1. Decompose current_n = init ∪ delta_1 ∪ ... ∪ delta_n
+  -- 2. By additivity: step(current_n) = ⋃_{i≤n} step(delta_i)  (where delta_0 = init)
+  -- 3. For each i: step(delta_i) ⊆ current_i ∪ delta_{i+1} ⊆ current_n
+  -- The full proof requires carefully tracking the decomposition.
   sorry
 
 /-- Init is contained in semiNaiveCurrent. -/
