@@ -40,11 +40,11 @@ let logBoolKV = (entries: array<(JSON.t, array<JSON.t>)>) => {
       | [v] =>
         (
           JSON.stringify(k),
-          Js.typeof(k),
+          typeof(k),
           JSON.stringify(v),
-          Js.typeof(v),
+          typeof(v),
         )
-      | _ => ("<unexpected>", Js.typeof(k), "<unexpected>", "unknown")
+      | _ => ("<unexpected>", typeof(k), "<unexpected>", typeof(k))
       }
     )
   Console.log2("boolKV snapshot", rows)

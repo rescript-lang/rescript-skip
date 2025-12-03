@@ -40,7 +40,7 @@ let logKeys = (
   entries: array<(JSON.t, array<JSON.t>)>,
 ) => {
   let keys =
-    entries->Array.map(((k, _vals)) => (JSON.stringify(k), Js.typeof(k)))
+    entries->Array.map(((k, _vals)) => (JSON.stringify(k), typeof(k) :> string))
   Console.log2(label, keys)
 }
 
@@ -77,7 +77,7 @@ let logKeysWithValues = (
     | [v] => JSON.stringify(v)
     | _ => `[${vals->Array.map(v => JSON.stringify(v))->Array.join(", ")}]`
     }
-    Console.log2(`  ${JSON.stringify(k)} (${Js.typeof(k)})`, `=> ${valStr}`)
+    Console.log2(`  ${JSON.stringify(k)} (${typeof(k) :> string})`, `=> ${valStr}`)
   })
 }
 

@@ -53,7 +53,7 @@ function logBoolKV(entries) {
         "<unexpected>",
         typeof k,
         "<unexpected>",
-        "unknown"
+        typeof k
       ];
     }
     let v = vals[0];
