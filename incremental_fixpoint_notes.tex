@@ -5,6 +5,9 @@
 \usepackage{lmodern}
 \usepackage{amsmath,amssymb}
 \usepackage{amsthm}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta}
+\tikzset{root/.style={draw,circle,thick}}
 
 \newtheorem{definition}{Definition}
 \newtheorem{example}{Example}
@@ -17,6 +20,9 @@
 
 \begin{document}
 \maketitle
+
+\tableofcontents
+\bigskip
 
 \begin{abstract}
 We observe that the incremental dead code elimination (DCE) algorithm from our reactive DCE work is an instance of a more general pattern: \emph{incremental fixpoint computation}.
@@ -279,6 +285,191 @@ $C_0 = I$, $\Delta_0 = I$, $\Delta_{n+1} = \mathsf{step}(\Delta_n) \setminus C_n
 $K_0 = I$, $K_{n+1} = K_n \setminus \{ x \mid x \notin B \land \text{no wf-deriver in } K_n \}$.
 \end{definition}
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Worked Example: DCE in Detail}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+We illustrate the API and algorithms with Dead Code Elimination (DCE), showing how expansion and contraction work on concrete graphs.
+
+\subsection{Setup}
+
+Consider a program represented as a directed graph where nodes are code units and edges represent dependencies (``$u \to v$'' means $u$ uses $v$).
+
+\begin{center}
+\begin{tikzpicture}[>=Stealth, node distance=1.6cm]
+  \node[root] (R) at (0,0) {$R$};
+  \node (A) at (1.8,0) {$A$};
+  \node (B) at (3.6,0) {$B$};
+  \node (C) at (5.4,0) {$C$};
+  \node (D) at (1.8,-1.6) {$D$};
+
+  \draw[->] (R) -- (A);
+  \draw[->] (A) -- (B);
+  \draw[->] (B) -- (C);
+  \draw[->] (A) -- (D);
+  \draw[->] (D) -- (B);
+\end{tikzpicture}
+\end{center}
+
+\begin{itemize}
+\item $\mathsf{base} = \{R\}$ (R is the root/entry point)
+\item $\mathsf{stepFwd}(R) = \{A\}$, $\mathsf{stepFwd}(A) = \{B, D\}$, $\mathsf{stepFwd}(B) = \{C\}$, $\mathsf{stepFwd}(D) = \{B\}$
+\end{itemize}
+
+\paragraph{Initial state after BFS expansion:}
+\begin{align*}
+\mathsf{current} &= \{R, A, B, C, D\} \\
+\mathsf{rank} &= \{R \mapsto 0,\, A \mapsto 1,\, B \mapsto 2,\, C \mapsto 3,\, D \mapsto 2\}
+\end{align*}
+
+Note: $B$ and $D$ have the same rank (both at distance 2 from $R$).
+
+For contraction we also write $\mathsf{stepInv}(x)$ for the set of predecessors $y$ with an edge $y \to x$, and maintain a set $\mathsf{dying}$ of nodes scheduled for removal.
+
+\subsection{Example: Expansion (Adding an Edge)}
+
+Suppose we add an edge $R \to E$ where $E$ is a new node with $\mathsf{stepFwd}(E) = \{F\}$.
+
+\begin{center}
+\begin{tikzpicture}[>=Stealth]
+  \node[root] (R) at (0,0) {$R$};
+  \node (A) at (1.8,0) {$A$};
+  \node (B) at (3.6,0) {$B$};
+  \node (C) at (5.4,0) {$C$};
+  \node (D) at (1.8,-1.6) {$D$};
+  \node (E) at (0,-1.6) {$E$};
+  \node (F) at (3.6,-1.6) {$F$};
+
+  \draw[->] (R) -- (A);
+  \draw[->] (A) -- (B);
+  \draw[->] (B) -- (C);
+  \draw[->] (A) -- (D);
+  \draw[->] (D) -- (B);
+  \draw[->] (R) -- (E);
+  \draw[->] (E) -- (F);
+\end{tikzpicture}
+\end{center}
+
+\paragraph{Expansion algorithm:}
+\begin{enumerate}
+\item $\mathsf{frontier} = \{E\}$ (new successors of $R$), $r = 1$
+\item Add $E$ with $\mathsf{rank}[E] = 1$
+\item $\mathsf{frontier} = \{F\}$, $r = 2$
+\item Add $F$ with $\mathsf{rank}[F] = 2$
+\item $\mathsf{frontier} = \{\}$, done
+\end{enumerate}
+
+\paragraph{Result:} $\mathsf{current} = \{R, A, B, C, D, E, F\}$
+
+\subsection{Example: Contraction (Removing an Edge)}
+
+Now suppose we remove the edge $A \to D$.
+
+\begin{center}
+\begin{tikzpicture}[>=Stealth]
+  \node[root] (R) at (0,0) {$R$};
+  \node (A) at (1.8,0) {$A$};
+  \node (B) at (3.6,0) {$B$};
+  \node (C) at (5.4,0) {$C$};
+  \node (D) at (1.8,-1.6) {$D$};
+  \node (E) at (0,-1.6) {$E$};
+  \node (F) at (3.6,-1.6) {$F$};
+
+  \draw[->] (R) -- (A);
+  \draw[->] (A) -- (B);
+  \draw[->] (B) -- (C);
+  \draw[->] (D) -- (B);
+  \draw[->] (R) -- (E);
+  \draw[->] (E) -- (F);
+\end{tikzpicture}
+\end{center}
+
+\paragraph{Contraction algorithm:}
+\begin{enumerate}
+\item $\mathsf{worklist} = \{D\}$ (lost its incoming edge from $A$)
+\item Process $D$:
+  \begin{itemize}
+  \item $D \notin \mathsf{base}$
+  \item Check for wf-deriver: $\mathsf{stepInv}(D) = \{A\}$, but edge $A \to D$ removed
+  \item No wf-deriver found, so $\mathsf{dying} = \{D\}$
+  \item All dependents of $D$ already have another wf-deriver, so no additional nodes are added to the worklist
+  \end{itemize}
+\item $\mathsf{worklist} = \{\}$, done
+\end{enumerate}
+
+\paragraph{Result:} $\mathsf{current} = \{R, A, B, C, E, F\}$ (D removed)
+
+\subsection{Example: Contraction with Cycles}
+
+This example shows why \emph{ranks} are essential. Consider:
+
+\begin{center}
+\begin{tikzpicture}[>=Stealth]
+  \node[root] (R) at (0,0) {$R$};
+  \node (A) at (1.8,0) {$A$};
+  \node (B) at (3.6,0) {$B$};
+
+  \draw[->] (R) -- (A);
+  \draw[->] (A) -- (B);
+  \draw[->] (B) to[bend left=30] (A);
+\end{tikzpicture}
+\end{center}
+
+\begin{itemize}
+\item $\mathsf{rank} = \{R \mapsto 0,\, A \mapsto 1,\, B \mapsto 2\}$
+\item $A$ has a wf-deriver: $R$ with $\mathsf{rank}[R] = 0 < 1$
+\item $B$ has a wf-deriver: $A$ with $\mathsf{rank}[A] = 1 < 2$
+\end{itemize}
+
+\paragraph{Now remove edge $R \to A$:}
+
+\begin{center}
+\begin{tikzpicture}[>=Stealth]
+  \node[root] (R) at (0,0) {$R$};
+  \node (A) at (1.8,0) {$A$};
+  \node (B) at (3.6,0) {$B$};
+
+  \draw[->] (A) -- (B);
+  \draw[->] (B) to[bend left=30] (A);
+\end{tikzpicture}
+\end{center}
+
+\paragraph{Contraction:}
+\begin{enumerate}
+\item $\mathsf{worklist} = \{A\}$ (lost edge from $R$)
+\item Process $A$:
+  \begin{itemize}
+  \item $\mathsf{stepInv}(A) = \{R, B\}$
+  \item $R \to A$ removed, so $R$ doesn't count
+  \item $B$ is in current, but $\mathsf{rank}[B] = 2 > 1 = \mathsf{rank}[A]$ --- \textbf{not a wf-deriver!}
+  \item No wf-deriver, so $A$ dies. Add $B$ to worklist.
+  \end{itemize}
+\item Process $B$:
+  \begin{itemize}
+  \item $\mathsf{stepInv}(B) = \{A\}$
+  \item $A$ is dying, so doesn't count
+  \item No wf-deriver, so $B$ dies.
+  \end{itemize}
+\item $\mathsf{worklist} = \{\}$, done
+\end{enumerate}
+
+\paragraph{Result:} $\mathsf{current} = \{R\}$ (entire cycle removed)
+
+\paragraph{Key insight:} Without rank checking, $A$ and $B$ would keep each other alive (each derives the other). The rank check $\mathsf{rank}[y] < \mathsf{rank}[x]$ breaks this mutual support because cycle members have equal or increasing ranks along cycle edges.
+
+\subsection{Summary}
+
+\begin{center}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Operation} & \textbf{Algorithm} & \textbf{Key Property} \\
+\hline
+Add edge/root & BFS expansion & Assigns increasing ranks \\
+Remove edge/root & Worklist cascade & Rank check breaks cycles \\
+\hline
+\end{tabular}
+\end{center}
+
 \section{Level 2: DSL with Automatic Derivation (Future)}
 
 The low-level API requires the user to provide $\mathsf{stepFromDelta}$ and prove that step is element-wise and additive.
@@ -408,4 +599,3 @@ The key contribution is \emph{well-founded cascade}: using the iterative constru
 This abstraction unifies incremental algorithms across domains (program analysis, databases, reactive systems) and provides a foundation for building efficient, correct incremental computations.
 
 \end{document}
-
