@@ -15,9 +15,7 @@
   - Expansion: lfp(F) ⊆ lfp(F') when F ⊑ F'
   - Contraction: wfCascadeFix(F', lfp(F)) = lfp(F') when F' ⊑ F
 
-  Remaining assumption (1 sorry):
-  - `semiNaive_stable_step_subset`: step(current) ⊆ current when stable
-    (requires additivity decomposition proof)
+  All proofs complete (no sorry).
 -/
 
 import Mathlib.Data.Set.Lattice
@@ -459,19 +457,105 @@ def semiNaiveStable (op : DecomposedOp α) (init : Set α) (n : ℕ) : Prop :=
 def stepAdditive (op : DecomposedOp α) : Prop :=
   ∀ S T, op.step (S ∪ T) = op.step S ∪ op.step T
 
+/-- Monotonicity of semiNaiveCurrent for any m ≤ n. -/
+lemma semiNaiveCurrent_mono' (op : DecomposedOp α) (init : Set α) (m n : ℕ) (h : m ≤ n) :
+    semiNaiveCurrent op init m ⊆ semiNaiveCurrent op init n := by
+  induction n with
+  | zero =>
+    have : m = 0 := Nat.eq_zero_of_le_zero h
+    subst this; rfl
+  | succ n ih =>
+    by_cases hm : m ≤ n
+    · exact Set.Subset.trans (ih hm) (semiNaiveCurrent_mono op init n)
+    · push_neg at hm
+      have : m = n + 1 := by omega
+      subst this; rfl
+
+/-- step(delta_i) ⊆ current_{i+1} for all i. -/
+lemma step_delta_subset_next (op : DecomposedOp α) (init : Set α) (i : ℕ) :
+    op.step (semiNaiveDelta op init i) ⊆ semiNaiveCurrent op init (i + 1) := by
+  intro x hx
+  simp only [semiNaiveCurrent, semiNaiveDelta, semiNaiveN, semiNaiveIter, semiNaiveStep]
+  by_cases h : x ∈ (semiNaiveN op init i).1
+  · exact Set.mem_union_left _ h
+  · apply Set.mem_union_right
+    simp only [Set.mem_diff]
+    exact ⟨hx, h⟩
+
+/-- By stability, step(delta_n) ⊆ current_n. -/
+lemma stable_step_delta_subset (op : DecomposedOp α) (init : Set α) (n : ℕ)
+    (h_stable : semiNaiveStable op init n) :
+    op.step (semiNaiveDelta op init n) ⊆ semiNaiveCurrent op init n := by
+  simp only [semiNaiveStable, semiNaiveDelta, semiNaiveN, semiNaiveIter, semiNaiveStep] at h_stable
+  rw [Set.eq_empty_iff_forall_not_mem] at h_stable
+  intro x hx
+  by_contra h
+  have : x ∈ op.step (semiNaiveN op init n).2 \ (semiNaiveN op init n).1 := by
+    simp only [Set.mem_diff]
+    exact ⟨hx, h⟩
+  exact h_stable x this
+
+/-- current_{n+1} = current_n ∪ delta_{n+1}. -/
+lemma current_union_delta (op : DecomposedOp α) (init : Set α) (n : ℕ) :
+    semiNaiveCurrent op init (n + 1) = semiNaiveCurrent op init n ∪ semiNaiveDelta op init (n + 1) := by
+  simp only [semiNaiveCurrent, semiNaiveDelta, semiNaiveN, semiNaiveIter]
+
 /-- When semi-naive is stable and step is additive, step(current) ⊆ current.
-    Proof sketch: with stability at n, delta_{n+1} = ∅, so step(delta_n) ⊆ current_n.
-    By induction: step(delta_i) ⊆ current_{i+1} ⊆ current_n for all i < n.
-    With additivity: step(current_n) = ⋃ step(delta_i) ⊆ current_n.
-    This proof is complex; we assume it holds for DCE-style operators. -/
+    Key insight: current_n = init ∪ delta_1 ∪ ... ∪ delta_n, and by additivity
+    step(current_n) = step(init) ∪ step(delta_1) ∪ ... ∪ step(delta_n).
+    Each step(delta_i) ⊆ current_{i+1} ⊆ current_n for i < n, and
+    step(delta_n) ⊆ current_n by stability. -/
 lemma semiNaive_stable_step_subset (op : DecomposedOp α) (init : Set α) (n : ℕ)
     (h_add : stepAdditive op)
     (h_stable : semiNaiveStable op init n) :
     op.step (semiNaiveCurrent op init n) ⊆ semiNaiveCurrent op init n := by
-  -- The full proof requires showing current_n = ⋃_{i≤n} delta_i
-  -- and using additivity to decompose step(current_n).
-  -- For now, we note this holds for DCE-style additive operators.
-  sorry
+  -- We prove by induction that step(current_m) ⊆ current_n for all m ≤ n.
+  -- Base case: step(current_0) = step(init) ⊆ current_1 ⊆ current_n
+  -- Inductive case: step(current_{m+1}) = step(current_m ∪ delta_{m+1})
+  --                = step(current_m) ∪ step(delta_{m+1})  [by additivity]
+  --                ⊆ current_n ∪ current_n = current_n    [by IH and step_delta_subset_next]
+  suffices h : ∀ m ≤ n, op.step (semiNaiveCurrent op init m) ⊆ semiNaiveCurrent op init n by
+    exact h n (Nat.le_refl n)
+  intro m hm
+  induction m with
+  | zero =>
+    -- step(init) ⊆ current_1 ⊆ current_n (or step(init) ⊆ current_0 if n = 0)
+    simp only [semiNaiveCurrent, semiNaiveN]
+    cases n with
+    | zero =>
+      -- n = 0: need to show step(init) ⊆ init, which follows from stability
+      -- Stability: delta_1 = step(init) \ init = ∅, so step(init) ⊆ init
+      simp only [semiNaiveStable, semiNaiveDelta, semiNaiveN, semiNaiveIter, semiNaiveStep] at h_stable
+      rw [Set.eq_empty_iff_forall_not_mem] at h_stable
+      intro x hx
+      by_contra h
+      exact h_stable x ⟨hx, h⟩
+    | succ n =>
+      -- n ≥ 1: step(init) ⊆ current_1 ⊆ current_{n+1}
+      have h1 : op.step init ⊆ semiNaiveCurrent op init 1 := step_delta_subset_next op init 0
+      simp only [semiNaiveDelta, semiNaiveN] at h1
+      have h2 : semiNaiveCurrent op init 1 ⊆ semiNaiveCurrent op init (n + 1) :=
+        semiNaiveCurrent_mono' op init 1 (n + 1) (by omega)
+      exact Set.Subset.trans h1 h2
+  | succ m ih =>
+    -- step(current_{m+1}) = step(current_m ∪ delta_{m+1})
+    rw [current_union_delta, h_add]
+    apply Set.union_subset
+    · -- step(current_m) ⊆ current_n by IH
+      exact ih (by omega)
+    · -- step(delta_{m+1}) ⊆ current_{m+2} ⊆ current_n
+      by_cases hcase : m + 1 < n
+      · -- m + 1 < n: use step_delta_subset_next
+        have h1 : op.step (semiNaiveDelta op init (m + 1)) ⊆ semiNaiveCurrent op init (m + 2) :=
+          step_delta_subset_next op init (m + 1)
+        have h2 : semiNaiveCurrent op init (m + 2) ⊆ semiNaiveCurrent op init n :=
+          semiNaiveCurrent_mono' op init (m + 2) n (by omega)
+        exact Set.Subset.trans h1 h2
+      · -- m + 1 = n: use stability
+        push_neg at hcase
+        have heq : m + 1 = n := by omega
+        rw [heq]
+        exact stable_step_delta_subset op init n h_stable
 
 /-- Init is contained in semiNaiveCurrent. -/
 lemma init_subset_semiNaiveCurrent (op : DecomposedOp α) (init : Set α) (n : ℕ) :

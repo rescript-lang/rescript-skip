@@ -274,14 +274,16 @@ Then well-founded cascade from $S$ converges to $K^* = S'$.
 \end{theorem}
 
 \begin{remark}[Lean Formalization]
-All definitions and theorems are formalized in Lean.%
+All definitions and theorems are formalized in Lean with \textbf{all proofs complete} (no \texttt{sorry}).%
 \footnote{See \texttt{lean-formalisation/IncrementalFixpoint.lean}.}
 
-\textbf{Fully proven:}
-Well-founded contraction correctness, semi-naive soundness, fixpoint monotonicity, all helper lemmas.
-
-\textbf{Remaining assumption} (1 \texttt{sorry}):
-Expansion completeness requires proving $\mathsf{step}(\mathsf{current}) \subseteq \mathsf{current}$ when stable.
+\textbf{Proven theorems:}
+\begin{itemize}
+  \item Well-founded contraction correctness
+  \item Semi-naive expansion correctness (including the key lemma that $\mathsf{step}(\mathsf{current}) \subseteq \mathsf{current}$ when stable, using additivity)
+  \item Fixpoint monotonicity under expansion/contraction
+  \item All helper lemmas for iteration, ranking, and cascade
+\end{itemize}
 
 The API requires: \texttt{stepElementWise} and \texttt{stepAdditive}. Both hold for DCE.
 \end{remark}
