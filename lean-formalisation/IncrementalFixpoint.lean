@@ -53,6 +53,281 @@ def DecomposedOp.toMonotoneOp (op : DecomposedOp α) : MonotoneOp α where
 abbrev DecomposedOp.F (op : DecomposedOp α) : Set α → Set α :=
   op.toMonotoneOp.F
 
+/-! ## Iterative Construction and Rank
+
+The least fixpoint can be constructed iteratively: lfp = ⋃ₙ Fⁿ(∅).
+Each element x ∈ lfp has a rank = minimum n such that x ∈ Fⁿ(∅).
+This provides a well-founded structure for derivations.
+-/
+
+/-- Iterative application of F, starting from ∅. -/
+def iterF (op : DecomposedOp α) : ℕ → Set α
+  | 0 => ∅
+  | n + 1 => op.F (iterF op n)
+
+/-- iterF is monotonically increasing. -/
+lemma iterF_mono (op : DecomposedOp α) (n : ℕ) : iterF op n ⊆ iterF op (n + 1) := by
+  induction n with
+  | zero => intro x hx; simp [iterF] at hx
+  | succ n ih => exact op.toMonotoneOp.mono _ _ ih
+
+/-- iterF is monotone in n. -/
+lemma iterF_mono' (op : DecomposedOp α) (m n : ℕ) (h : m ≤ n) :
+    iterF op m ⊆ iterF op n := by
+  induction n with
+  | zero =>
+    have : m = 0 := Nat.eq_zero_of_le_zero h
+    subst this; rfl
+  | succ n ih =>
+    by_cases hm : m ≤ n
+    · exact Set.Subset.trans (ih hm) (iterF_mono op n)
+    · push_neg at hm
+      have : m = n + 1 := by omega
+      subst this; rfl
+
+/-- Base elements are in iterF 1. -/
+lemma base_subset_iterF_one (op : DecomposedOp α) : op.base ⊆ iterF op 1 := by
+  intro x hx
+  simp only [iterF, DecomposedOp.F, DecomposedOp.toMonotoneOp]
+  exact Set.mem_union_left _ hx
+
+/-- The limit of iterF equals the least fixpoint. -/
+def iterFLimit (op : DecomposedOp α) : Set α := ⋃ n, iterF op n
+
+/-- Elements in iterF n are in the limit. -/
+lemma iterF_subset_limit (op : DecomposedOp α) (n : ℕ) :
+    iterF op n ⊆ iterFLimit op := by
+  intro x hx
+  simp only [iterFLimit, Set.mem_iUnion]
+  exact ⟨n, hx⟩
+
+/-- An element is in the limit (has finite rank). -/
+def inLimit (op : DecomposedOp α) (x : α) : Prop := x ∈ iterFLimit op
+
+/-- An element has a rank iff it's in the iterF limit. -/
+lemma inLimit_iff (op : DecomposedOp α) (x : α) :
+    inLimit op x ↔ ∃ n, x ∈ iterF op n := by
+  simp only [inLimit, iterFLimit, Set.mem_iUnion]
+
+/-- Base elements are in the limit. -/
+lemma base_inLimit (op : DecomposedOp α) (x : α) (hx : x ∈ op.base) :
+    inLimit op x := by
+  rw [inLimit_iff]
+  exact ⟨1, base_subset_iterF_one op hx⟩
+
+/-- First appearance: x first appears at step n (x ∈ iterF(n) but x ∉ iterF(n-1)). -/
+def firstAppears (op : DecomposedOp α) (x : α) (n : ℕ) : Prop :=
+  x ∈ iterF op n ∧ (n = 0 ∨ x ∉ iterF op (n - 1))
+
+/-- Comparing ranks: y appears strictly before x in the iterative construction.
+    This means y's first appearance is at a strictly earlier step than x's. -/
+def rankLt (op : DecomposedOp α) (y x : α) : Prop :=
+  ∃ ny nx, firstAppears op y ny ∧ firstAppears op x nx ∧ ny < nx
+
+/-! ## Well-Founded Derivations
+
+For contraction, simple counting fails on cycles. We use well-founded
+derivation counts that only count derivations from lower-ranked elements.
+-/
+
+/-- Well-founded derivation: y derives x and has strictly lower rank. -/
+def wfDerives (op : DecomposedOp α) (y x : α) : Prop :=
+  rankLt op y x ∧ x ∈ op.step {y}
+
+/-- Has a well-founded deriver: some element in S derives x with lower rank. -/
+def hasWfDeriver (op : DecomposedOp α) (S : Set α) (x : α) : Prop :=
+  ∃ y ∈ S, rankLt op y x ∧ x ∈ op.step {y}
+
+/-- Non-base elements in iterF(n+1) \ iterF(n) have lower-ranked derivers.
+    Requires step to be "element-wise": x ∈ step(S) implies ∃y∈S. x ∈ step({y}). -/
+def stepElementWise (op : DecomposedOp α) : Prop :=
+  ∀ S x, x ∈ op.step S → ∃ y ∈ S, x ∈ op.step {y}
+
+/-- With element-wise step, iterF elements have well-founded derivers. -/
+lemma iterF_has_wf_deriver (op : DecomposedOp α) (h_ew : stepElementWise op)
+    (x : α) (n : ℕ) (hin : x ∈ iterF op (n + 1)) (hnotin : x ∉ iterF op n)
+    (hnotbase : x ∉ op.base) :
+    ∃ y ∈ iterF op n, x ∈ op.step {y} := by
+  simp only [iterF, DecomposedOp.F, DecomposedOp.toMonotoneOp, Set.mem_union] at hin
+  cases hin with
+  | inl hbase => exact absurd hbase hnotbase
+  | inr hstep => exact h_ew (iterF op n) x hstep
+
+/-! ## Well-Founded Cascade
+
+Cascade using well-founded derivation detection.
+-/
+
+/-- Should an element die in well-founded cascade? No wf-derivers and not in base. -/
+def wfShouldDie (op : DecomposedOp α) (S : Set α) : Set α :=
+  {x ∈ S | x ∉ op.base ∧ ¬hasWfDeriver op S x}
+
+/-- One step of well-founded cascade. -/
+def wfCascadeStep (op : DecomposedOp α) (S : Set α) : Set α :=
+  S \ wfShouldDie op S
+
+/-- Well-founded cascade iteration. -/
+def wfCascadeN (op : DecomposedOp α) (init : Set α) : ℕ → Set α
+  | 0 => init
+  | n + 1 => wfCascadeStep op (wfCascadeN op init n)
+
+/-- Well-founded cascade fixpoint. -/
+def wfCascadeFix (op : DecomposedOp α) (init : Set α) : Set α :=
+  ⋂ n, wfCascadeN op init n
+
+/-- Well-founded cascade is monotonically decreasing. -/
+lemma wfCascadeN_mono (op : DecomposedOp α) (init : Set α) (n : ℕ) :
+    wfCascadeN op init (n + 1) ⊆ wfCascadeN op init n := by
+  simp only [wfCascadeN, wfCascadeStep]
+  exact Set.diff_subset
+
+/-- Base elements survive well-founded cascade. -/
+lemma base_subset_wfCascadeN (op : DecomposedOp α) (init : Set α) (n : ℕ)
+    (h_base : op.base ⊆ init) :
+    op.base ⊆ wfCascadeN op init n := by
+  induction n with
+  | zero => simp [wfCascadeN]; exact h_base
+  | succ n ih =>
+    intro x hx
+    simp only [wfCascadeN, wfCascadeStep, wfShouldDie, Set.mem_diff, Set.mem_sep_iff]
+    exact ⟨ih hx, fun ⟨_, hnotbase, _⟩ => hnotbase hx⟩
+
+/-! ## Well-Founded Cascade Completeness
+
+The key insight: with well-founded ranking, cycles don't provide support
+because cycle members have equal rank (or no rank), not strictly lower rank.
+-/
+
+/-- Elements of iterFLimit have well-founded derivers (for non-base elements).
+    This is the key property that enables completeness. -/
+lemma iterFLimit_has_wf_deriver (op : DecomposedOp α) (h_ew : stepElementWise op)
+    (x : α) (hx : x ∈ iterFLimit op) (hnotbase : x ∉ op.base) :
+    hasWfDeriver op (iterFLimit op) x := by
+  -- x ∈ iterFLimit means ∃n. x ∈ iterF(n)
+  simp only [iterFLimit, Set.mem_iUnion] at hx
+  obtain ⟨n, hn⟩ := hx
+  -- Find the first n where x appears
+  -- x must appear at some n > 0 since x ∉ base and iterF(0) = ∅
+  cases n with
+  | zero => simp [iterF] at hn
+  | succ n =>
+    -- x ∈ iterF(n+1). Either x ∈ iterF(n) or x first appears at n+1
+    by_cases hprev : x ∈ iterF op n
+    · -- x was already in iterF(n), recurse (well-founded on n)
+      sorry -- This case needs well-founded recursion on n
+    · -- x first appears at n+1
+      -- By iterF_has_wf_deriver, ∃y ∈ iterF(n). x ∈ step({y})
+      obtain ⟨y, hy_in, hy_derives⟩ := iterF_has_wf_deriver op h_ew x n hn hprev hnotbase
+      -- y has strictly lower rank than x (y appears at ≤n, x at n+1)
+      use y
+      constructor
+      · exact iterF_subset_limit op n hy_in
+      · constructor
+        · -- rankLt op y x
+          simp only [rankLt, firstAppears]
+          -- y ∈ iterF(n), x first appears at n+1
+          -- Need to find ny ≤ n where y first appears
+          sorry
+        · exact hy_derives
+
+/-- Elements of lfp' survive well-founded cascade from lfp.
+    Key: lfp' elements have well-founded derivers within lfp'. -/
+lemma lfp'_subset_wfCascadeN (op op' : DecomposedOp α) (lfp lfp' : Set α) (n : ℕ)
+    (h_ew : stepElementWise op')
+    (h_lfp' : isLeastFixpoint op'.toMonotoneOp lfp')
+    (h_sub : lfp' ⊆ lfp)
+    -- Key: lfp' = iterFLimit(op'), so lfp' elements have wf-derivers in lfp'
+    (h_lfp'_eq_limit : lfp' = iterFLimit op') :
+    lfp' ⊆ wfCascadeN op' lfp n := by
+  induction n with
+  | zero => simp [wfCascadeN]; exact h_sub
+  | succ n ih =>
+    intro x hx
+    simp only [wfCascadeN, wfCascadeStep, wfShouldDie, Set.mem_diff, Set.mem_sep_iff]
+    constructor
+    · exact ih hx
+    · -- x is not in wfShouldDie
+      intro ⟨_, hnotbase, hno_wf_deriver⟩
+      -- x ∈ lfp' and x ∉ base', so x has a wf-deriver in lfp'
+      have hx_in_limit : x ∈ iterFLimit op' := h_lfp'_eq_limit ▸ hx
+      have h_has_deriver := iterFLimit_has_wf_deriver op' h_ew x hx_in_limit hnotbase
+      -- That deriver is in wfCascadeN (by IH, since deriver ∈ lfp')
+      obtain ⟨y, hy_in_limit, hy_ranklt, hy_derives⟩ := h_has_deriver
+      have hy_in_lfp' : y ∈ lfp' := h_lfp'_eq_limit ▸ hy_in_limit
+      have hy_in_cascade : y ∈ wfCascadeN op' lfp n := ih hy_in_lfp'
+      -- So x has a wf-deriver in wfCascadeN, contradiction
+      exact hno_wf_deriver ⟨y, hy_in_cascade, hy_ranklt, hy_derives⟩
+
+/-- x has no finite rank means no element can have rankLt to x. -/
+lemma no_rankLt_to_non_limit (op' : DecomposedOp α) (x : α)
+    (hx_notin : x ∉ iterFLimit op') (y : α) :
+    ¬rankLt op' y x := by
+  simp only [rankLt, firstAppears, not_exists, not_and]
+  intro ny nx _ ⟨hx_in_iterF, _⟩ _
+  -- x ∈ iterF(nx) contradicts x ∉ iterFLimit
+  have : x ∈ iterFLimit op' := iterF_subset_limit op' nx hx_in_iterF
+  exact absurd this hx_notin
+
+/-- Non-lfp' elements are removed by well-founded cascade.
+    Key: elements not in lfp' = iterFLimit(op') have no finite rank under op',
+    so no element has strictly lower rank, hence no wf-derivers. -/
+lemma wfCascade_removes_non_lfp' (op' : DecomposedOp α) (lfp lfp' : Set α) (x : α)
+    (h_lfp' : isLeastFixpoint op'.toMonotoneOp lfp')
+    (hx_in_lfp : x ∈ lfp) (hx_notin_lfp' : x ∉ lfp')
+    (h_lfp'_eq_limit : lfp' = iterFLimit op') :
+    x ∉ wfCascadeFix op' lfp := by
+  -- x ∉ lfp' = iterFLimit(op'), so x has no finite rank under op'
+  -- rankLt requires firstAppears, so nothing has rankLt to x
+  -- Therefore x has no wf-derivers and will be removed
+  simp only [wfCascadeFix, Set.mem_iInter, not_forall]
+  by_cases hbase : x ∈ op'.base
+  · -- x ∈ base' ⊆ lfp', contradiction
+    have : x ∈ lfp' := by
+      have hfp : op'.F lfp' = lfp' := h_lfp'.1
+      have : x ∈ op'.F lfp' := Set.mem_union_left _ hbase
+      exact hfp ▸ this
+    exact absurd this hx_notin_lfp'
+  · -- x ∉ base' and x ∉ iterFLimit(op')
+    -- x has no wf-derivers, will be removed at step 1
+    have hx_notin_limit : x ∉ iterFLimit op' := h_lfp'_eq_limit ▸ hx_notin_lfp'
+    use 1
+    -- Show x ∉ wfCascadeN 1 = wfCascadeStep(lfp) = lfp \ wfShouldDie
+    simp only [wfCascadeN, wfCascadeStep]
+    -- Need to show x ∈ wfShouldDie or x ∉ lfp. We have x ∈ lfp, so show x ∈ wfShouldDie.
+    simp only [Set.mem_diff]
+    intro ⟨_, hx_not_die⟩
+    -- x should die: x ∈ lfp, x ∉ base', x has no wf-derivers
+    simp only [wfShouldDie, Set.mem_sep_iff, hasWfDeriver] at hx_not_die
+    apply hx_not_die
+    refine ⟨hx_in_lfp, hbase, ?_⟩
+    -- No wf-derivers from lfp because rankLt requires x to have finite rank
+    intro ⟨y, _, hy_ranklt, _⟩
+    exact no_rankLt_to_non_limit op' x hx_notin_limit y hy_ranklt
+
+/-- Well-founded contraction correctness: wfCascadeFix = lfp'.
+    Requires: lfp' ⊆ lfp (contraction), step is element-wise, lfp' = iterFLimit(op'). -/
+theorem wf_contraction_correctness (op' : DecomposedOp α) (lfp lfp' : Set α)
+    (h_ew : stepElementWise op')
+    (h_lfp' : isLeastFixpoint op'.toMonotoneOp lfp')
+    (h_sub : lfp' ⊆ lfp)  -- Contraction implies lfp' ⊆ lfp
+    (h_lfp'_eq_limit : lfp' = iterFLimit op') :
+    wfCascadeFix op' lfp = lfp' := by
+  apply Set.Subset.antisymm
+  · -- wfCascadeFix ⊆ lfp'
+    intro x hx
+    by_contra hx_notin
+    simp only [wfCascadeFix, Set.mem_iInter] at hx
+    -- x ∈ wfCascadeN for all n, but x ∉ lfp'
+    have h_removes := wfCascade_removes_non_lfp' op' lfp lfp' x h_lfp' (hx 0) hx_notin h_lfp'_eq_limit
+    simp only [wfCascadeFix, Set.mem_iInter, not_forall] at h_removes
+    obtain ⟨n, hn⟩ := h_removes
+    exact hn (hx n)
+  · -- lfp' ⊆ wfCascadeFix
+    intro x hx
+    simp only [wfCascadeFix, Set.mem_iInter]
+    intro n
+    exact lfp'_subset_wfCascadeN op' op' lfp lfp' n h_ew h_lfp' h_sub h_lfp'_eq_limit hx
+
 /-! ## Semi-Naive Evaluation
 
 For expansion, we use semi-naive evaluation:

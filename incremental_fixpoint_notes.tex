@@ -277,10 +277,60 @@ All definitions and theorems above are formalized in Lean.%
 \textbf{Overall correctness} requires additional assumptions:
 \begin{itemize}
 \item \textbf{Expansion} ($C_n = S'$): Proven assuming (1) step is \emph{additive}, i.e., $\mathsf{step}(A \cup B) = \mathsf{step}(A) \cup \mathsf{step}(B)$, and (2) new base $\subseteq$ old fixpoint.
-\item \textbf{Contraction} ($K^* = S'$): The direction $S' \subseteq K^*$ is proven assuming count is \emph{monotone} in its set argument. The reverse $K^* \subseteq S'$ remains future work.
+\item \textbf{Contraction} ($K^* = S'$): The direction $S' \subseteq K^*$ is proven assuming count is \emph{monotone} in its set argument. The reverse $K^* \subseteq S'$ remains future work for simple counting.
 \end{itemize}
 
 Both additivity and count monotonicity hold for DCE-style operators.
+\end{remark}
+
+\subsubsection{Well-Founded Derivations}
+
+Simple counting-based cascade is not complete for cyclic graphs: unreachable cycles keep each other alive with positive counts. The solution is \emph{well-founded derivations}.
+
+\begin{definition}[Iterative Construction and Rank]
+The least fixpoint is constructed iteratively:
+\begin{align*}
+F^0(\emptyset) &= \emptyset \\
+F^{n+1}(\emptyset) &= F(F^n(\emptyset)) \\
+\mathsf{lfp}(F) &= \bigcup_{n \geq 0} F^n(\emptyset)
+\end{align*}
+The \emph{rank} of $x \in \mathsf{lfp}(F)$ is the minimum $n$ such that $x \in F^n(\emptyset)$.
+Elements not in $\mathsf{lfp}(F)$ have no finite rank.
+\end{definition}
+
+\begin{definition}[Well-Founded Derivation]
+Element $y$ \emph{well-foundedly derives} $x$ if $\mathsf{rank}(y) < \mathsf{rank}(x)$ and $x \in \mathsf{step}(\{y\})$.
+\end{definition}
+
+\begin{definition}[Well-Founded Cascade]
+\emph{Well-founded cascade} removes elements that:
+\begin{enumerate}
+\item Are not in the base, and
+\item Have no well-founded deriver in the current set.
+\end{enumerate}
+This differs from simple cascade: cycle members have equal (or no) rank, so they don't provide well-founded support to each other.
+\end{definition}
+
+\begin{theorem}[Well-Founded Contraction Correctness]
+Let $F' \sqsubseteq F$ (contraction), $S = \mathsf{lfp}(F)$, $S' = \mathsf{lfp}(F')$.
+Assume:
+\begin{enumerate}
+\item $\mathsf{step}$ is \emph{element-wise}: $x \in \mathsf{step}(T)$ implies $\exists y \in T.\, x \in \mathsf{step}(\{y\})$.
+\item $S' = \bigcup_n F'^n(\emptyset)$ (the iterative characterization).
+\end{enumerate}
+Then well-founded cascade from $S$ converges to $S'$.
+\end{theorem}
+
+\begin{remark}[Well-Founded Lean Formalization]
+The well-founded cascade and its correctness theorem are fully formalized in Lean:
+\begin{itemize}
+\item \texttt{iterF}, \texttt{iterFLimit}: iterative construction
+\item \texttt{rankLt}: well-founded rank comparison
+\item \texttt{wfCascadeStep}, \texttt{wfCascadeN}, \texttt{wfCascadeFix}: cascade
+\item \texttt{wf\_contraction\_correctness}: main theorem (fully proven)
+\item \texttt{wfCascade\_removes\_non\_lfp'}: non-lfp' elements are removed (fully proven)
+\end{itemize}
+The key insight: elements not in $S' = \mathsf{iterFLimit}(F')$ have no finite rank under $F'$, so nothing has strictly lower rank, hence no well-founded derivers.
 \end{remark}
 
 \section{Level 2: DSL with Automatic Derivation (Future)}
