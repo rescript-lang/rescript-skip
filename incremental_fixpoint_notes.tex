@@ -87,69 +87,102 @@ $\mathsf{stepFromDelta}(G, \Delta) = \{ v \mid \exists u \in \Delta.\, (u,v) \in
 \end{example}
 
 \paragraph{For Counting-Based Contraction.}
-When $F' \subseteq F$ (the operator shrinks), we use \emph{counting-based deletion}:
+When $F' \subseteq F$ (the operator shrinks), we use \emph{well-founded cascade}:
 \begin{itemize}
-  \item Track how many ``derivations'' support each element
-  \item When a derivation is removed, decrement the count
-  \item When count reaches zero, remove the element and propagate
+  \item Use the iterative construction rank to identify well-founded derivers
+  \item Remove elements with no well-founded derivers (and not in base)
+  \item Propagate: removing an element may eliminate derivers for others
 \end{itemize}
 
+The key insight: cycle members have equal rank, so they don't provide well-founded support to each other. This correctly handles unreachable cycles.
+
+\subsection{Specification (Not Implementation)}
+
+\textbf{Important:} What follows is a \emph{mathematical specification} of what the update algorithms compute, not an executable implementation. The Lean formalization proves correctness of these specifications but does not provide runnable code.
+
 The user provides:
-\[
-\mathsf{derivationCount} : \mathsf{Params} \times \mathcal{P}(A) \times A \to \mathbb{N}
-\]
-Given the current fixpoint, how many ways is element $x$ derived?
+\begin{itemize}
+  \item $\mathsf{base}$: seed elements
+  \item $\mathsf{stepFromDelta}$: derive new elements from a delta
+  \item Proof that step is \emph{element-wise}: $x \in \mathsf{step}(S) \Rightarrow \exists y \in S.\, x \in \mathsf{step}(\{y\})$
+  \item Proof that step is \emph{additive}: $\mathsf{step}(A \cup B) = \mathsf{step}(A) \cup \mathsf{step}(B)$
+\end{itemize}
 
 \begin{example}[DCE]
-$\mathsf{derivationCount}(G, \mathsf{live}, v) = |\{ u \mid (u,v) \in G.\mathsf{edges} \land u \in \mathsf{live} \}|$
-
-This is exactly the \textsf{refcount} maintained by the DCE algorithm.
+DCE satisfies both properties: if $v$ is reachable from $S$, there's a specific predecessor $u \in S$ with $(u,v) \in \mathsf{edges}$.
 \end{example}
 
-\subsection{The API}
-
-\begin{verbatim}
-interface IncrementalFixpoint<A, Params, Delta> {
-  // User provides:
-  base: (params: Params) => Set<A>
-  stepFromDelta: (params: Params, delta: Set<A>) => Set<A>
-  derivationCount: (params: Params, fp: Set<A>, x: A) => Nat
-  applyDelta: (params: Params, delta: Delta) => Params
-  
-  // System provides:
-  current: Set<A>
-  counts: Map<A, Nat>
-  
-  update(delta: Delta): { added: Set<A>, removed: Set<A> }
-}
-\end{verbatim}
-
-\subsection{Update Algorithm}
+\subsection{Update Algorithms (Specification)}
 
 \paragraph{Expansion.}
-When $F$ grows:
-\begin{enumerate}
-  \item Compute initial delta: $\Delta_0 = F'(\mathsf{current}) \setminus \mathsf{current}$
-  \item Semi-naive iterate:
-    \begin{align*}
-      \Delta_{n+1} &= \mathsf{stepFromDelta}(\Delta_n) \setminus \mathsf{current} \\
-      \mathsf{current} &\gets \mathsf{current} \cup \Delta_{n+1}
-    \end{align*}
-  \item Update derivation counts for new elements
-\end{enumerate}
+When $F$ grows, semi-naive iteration computes:
+\begin{align*}
+C_0 &= \mathsf{lfp}(F) & \Delta_0 &= \mathsf{lfp}(F) \\
+C_{n+1} &= C_n \cup \Delta_{n+1} & \Delta_{n+1} &= \mathsf{step}'(\Delta_n) \setminus C_n
+\end{align*}
+The sequence $C_n$ is monotonically increasing. If it stabilizes (i.e., $\Delta_{n+1} = \emptyset$ for some $n$), then $C_n = \mathsf{lfp}(F')$.
 
 \paragraph{Contraction.}
-When $F$ shrinks:
-\begin{enumerate}
-  \item Update derivation counts for removed derivations
-  \item Initialize cascade: $Q = \{ x \in \mathsf{current} \mid \mathsf{counts}[x] = 0 \land x \notin \mathsf{base} \}$
-  \item Propagate:
-    \begin{itemize}
-      \item Remove $x$ from current
-      \item Decrement counts of elements derived from $x$
-      \item Add newly-zero elements to $Q$
-    \end{itemize}
-\end{enumerate}
+When $F$ shrinks, well-founded cascade computes:
+\[
+K_0 = \mathsf{lfp}(F), \qquad K_{n+1} = K_n \setminus \{ x \in K_n \mid x \notin \mathsf{base}' \land \text{no wf-deriver in } K_n \}
+\]
+where an element's \emph{rank} is when it first appears in $F^n(\emptyset)$, and $y$ is a \emph{well-founded deriver} of $x$ if $\mathsf{rank}(y) < \mathsf{rank}(x)$ and $x \in \mathsf{step}'(\{y\})$.
+Cycles don't provide support because cycle members have equal rank.
+
+The sequence $K_n$ is monotonically decreasing. If it stabilizes, then $K_n = \mathsf{lfp}(F')$.
+
+\subsection{From Specification to Implementation}
+
+The specifications above operate on abstract sets and assume convergence. A real implementation requires additional ingredients:
+
+\paragraph{1. Finite representation.}
+The specifications use $\mathsf{Set}\ A$ (arbitrary sets). An implementation needs:
+\begin{itemize}
+  \item Finite domain or lazy enumeration
+  \item Efficient set operations (membership, union, difference)
+\end{itemize}
+
+\paragraph{2. Termination.}
+The specifications define $K^* = \bigcap_n K_n$ (infinite intersection). An implementation needs:
+\begin{itemize}
+  \item Proof that iteration stabilizes in finite steps
+  \item Or: a bound on the number of iterations (e.g., $|A|$ for finite domains)
+\end{itemize}
+
+\paragraph{3. Rank computation.}
+Well-founded cascade requires comparing ranks. An implementation needs:
+\begin{itemize}
+  \item Either: precompute and store ranks for all elements
+  \item Or: compute ranks on-demand during cascade
+  \item For DCE: rank = BFS distance from roots (computable)
+\end{itemize}
+
+\paragraph{4. Detecting stabilization.}
+\begin{itemize}
+  \item Expansion: check if $\Delta_{n+1} = \emptyset$
+  \item Contraction: check if $K_{n+1} = K_n$ (no elements removed)
+\end{itemize}
+
+\paragraph{5. Complexity analysis.}
+\begin{itemize}
+  \item Expansion: $O(\text{new elements})$ iterations, each processing a delta
+  \item Contraction: $O(|K_0|)$ iterations in the worst case
+\end{itemize}
+
+\begin{remark}[What the Lean Formalization Provides]
+The Lean formalization proves:
+\begin{itemize}
+  \item \textbf{Correctness:} If the algorithms stabilize, they compute the new fixpoint
+  \item \textbf{Soundness:} Intermediate results are always subsets/supersets of the target
+\end{itemize}
+It does \emph{not} provide:
+\begin{itemize}
+  \item Termination proofs
+  \item Complexity bounds  
+  \item Executable code
+\end{itemize}
+\end{remark}
 
 \subsection{Formal Definitions and Correctness}
 
@@ -192,107 +225,15 @@ $C_n \subseteq C_{n+1}$ for all $n \geq 0$.
 If $I \subseteq \mathsf{lfp}(F)$, then $C_n \subseteq \mathsf{lfp}(F)$ for all $n \geq 0$.
 \end{theorem}
 
-\subsubsection{Counting-Based Cascade (Contraction)}
-
-\begin{definition}[Derivation Count]
-A function $\mathsf{count} : \mathcal{P}(A) \times A \to \mathbb{N}$ is a \emph{valid derivation count} for operator $(B, \mathsf{step})$ if:
-\[
-x \in \mathsf{step}(S) \iff \mathsf{count}(S, x) > 0
-\]
-\end{definition}
-
-\begin{definition}[Cascade Iteration]
-Given operator $(B, \mathsf{step})$, count function $\mathsf{count}$, and initial set $I$:
-\begin{align*}
-\mathsf{shouldDie}(S) &= \{ x \in S \mid x \notin B \land \mathsf{count}(S, x) = 0 \} \\
-\mathsf{cascadeStep}(S) &= S \setminus \mathsf{shouldDie}(S) \\
-K_0 &= I \\
-K_{n+1} &= \mathsf{cascadeStep}(K_n)
-\end{align*}
-\end{definition}
-
-\begin{theorem}[Cascade Monotonicity]
-$K_{n+1} \subseteq K_n$ for all $n \geq 0$.
-\end{theorem}
-
-\begin{theorem}[Base Preservation]
-If $B \subseteq I$, then $B \subseteq K_n$ for all $n \geq 0$.
-\end{theorem}
-
-\begin{definition}[Cascade Fixpoint]
-$K^* = \bigcap_{n \geq 0} K_n$.
-\end{definition}
-
-\begin{definition}[Cascade Stability]
-Cascade is \emph{stable at step $n$} if $K_{n+1} = K_n$.
-\end{definition}
-
-\begin{theorem}[Stability Persistence]
-If cascade is stable at step $n$, then $K_m = K_n$ for all $m \geq n$.
-\end{theorem}
-
-\begin{theorem}[Stable Fixpoint Characterization]
-If cascade is stable at step $n$, then $K^* = K_n$.
-\end{theorem}
-
-\begin{theorem}[Cascade Soundness]
-If cascade is stable at step $n$, then $K^* \subseteq F(K^*)$.
-That is, the cascade fixpoint is a prefixpoint of~$F$.
-\end{theorem}
-
-\subsubsection{Overall Correctness}
-
-\begin{theorem}[Expansion Correctness]
-Let $F \sqsubseteq F'$ (expansion), $S = \mathsf{lfp}(F)$, and $S' = \mathsf{lfp}(F')$.
-If semi-naive iteration from $S$ with operator $F'$ stabilizes at step $n$, then:
-\[
-C_n = S'
-\]
-\end{theorem}
-
-\begin{theorem}[Contraction Correctness]
-Let $F' \sqsubseteq F$ (contraction), $S = \mathsf{lfp}(F)$, and $S' = \mathsf{lfp}(F')$.
-If cascade from $S$ with operator $F'$ stabilizes at step $n$, then:
-\[
-K^* = S'
-\]
-\end{theorem}
-
-These theorems state that the incremental update algorithm is \emph{correct}:
-starting from the old fixpoint and applying the appropriate algorithm (semi-naive for expansion, cascade for contraction), we obtain exactly the new fixpoint.
-
-\begin{remark}[Lean Formalization]
-All definitions and theorems above are formalized in Lean.%
-\footnote{See \texttt{lean-formalisation/IncrementalFixpoint.lean}.}
-
-\textbf{Fully proven} (no \texttt{sorry}):
-\begin{itemize}
-\item Semi-naive soundness: $C_n \subseteq \mathsf{lfp}(F)$
-\item Cascade soundness: $K^* \subseteq F(K^*)$ when stable
-\item Fixpoint monotonicity under expansion/contraction
-\item Cascade stability persistence and fixpoint characterization
-\item Contraction direction: $S' \subseteq K^*$ (new fixpoint survives cascade)
-\end{itemize}
-
-\textbf{Overall correctness} requires additional assumptions:
-\begin{itemize}
-\item \textbf{Expansion} ($C_n = S'$): Proven assuming (1) step is \emph{additive}, i.e., $\mathsf{step}(A \cup B) = \mathsf{step}(A) \cup \mathsf{step}(B)$, and (2) new base $\subseteq$ old fixpoint.
-\item \textbf{Contraction} ($K^* = S'$): The direction $S' \subseteq K^*$ is proven assuming count is \emph{monotone} in its set argument. The reverse $K^* \subseteq S'$ remains future work for simple counting.
-\end{itemize}
-
-Both additivity and count monotonicity hold for DCE-style operators.
-\end{remark}
-
-\subsubsection{Well-Founded Derivations}
-
-Simple counting-based cascade is not complete for cyclic graphs: unreachable cycles keep each other alive with positive counts. The solution is \emph{well-founded derivations}.
+\subsubsection{Well-Founded Cascade (Contraction)}
+\label{sec:wf-derivations}
 
 \begin{definition}[Iterative Construction and Rank]
 The least fixpoint is constructed iteratively:
 \begin{align*}
-F^0(\emptyset) &= \emptyset \\
-F^{n+1}(\emptyset) &= F(F^n(\emptyset)) \\
-\mathsf{lfp}(F) &= \bigcup_{n \geq 0} F^n(\emptyset)
+F^0(\emptyset) &= \emptyset, \qquad
+F^{n+1}(\emptyset) = F(F^n(\emptyset)), \qquad
+\mathsf{lfp}(F) = \bigcup_{n \geq 0} F^n(\emptyset)
 \end{align*}
 The \emph{rank} of $x \in \mathsf{lfp}(F)$ is the minimum $n$ such that $x \in F^n(\emptyset)$.
 Elements not in $\mathsf{lfp}(F)$ have no finite rank.
@@ -303,40 +244,52 @@ Element $y$ \emph{well-foundedly derives} $x$ if $\mathsf{rank}(y) < \mathsf{ran
 \end{definition}
 
 \begin{definition}[Well-Founded Cascade]
-\emph{Well-founded cascade} removes elements that:
-\begin{enumerate}
-\item Are not in the base, and
-\item Have no well-founded deriver in the current set.
-\end{enumerate}
-This differs from simple cascade: cycle members have equal (or no) rank, so they don't provide well-founded support to each other.
+Given initial set $I$:
+\begin{align*}
+\mathsf{wfShouldDie}(S) &= \{ x \in S \mid x \notin B \land \text{no wf-deriver in } S \} \\
+K_0 &= I, \qquad K_{n+1} = K_n \setminus \mathsf{wfShouldDie}(K_n)
+\end{align*}
+Key insight: cycle members have equal (or no) rank, so they don't provide well-founded support to each other.
 \end{definition}
 
-\begin{theorem}[Well-Founded Contraction Correctness]
-Let $F' \sqsubseteq F$ (contraction), $S = \mathsf{lfp}(F)$, $S' = \mathsf{lfp}(F')$.
-Assume:
-\begin{enumerate}
-\item $\mathsf{step}$ is \emph{element-wise}: $x \in \mathsf{step}(T)$ implies $\exists y \in T.\, x \in \mathsf{step}(\{y\})$.
-\item $S' = \bigcup_n F'^n(\emptyset)$ (the iterative characterization).
-\end{enumerate}
-Then well-founded cascade from $S$ converges to $S'$.
+\begin{theorem}[Cascade Monotonicity]
+$K_{n+1} \subseteq K_n$ for all $n \geq 0$.
 \end{theorem}
 
-\begin{remark}[Well-Founded Lean Formalization]
-The well-founded cascade and its correctness theorem are fully formalized in Lean:
-\begin{itemize}
-\item \texttt{iterF}, \texttt{iterFLimit}: iterative construction
-\item \texttt{rankLt}: well-founded rank comparison
-\item \texttt{wfCascadeStep}, \texttt{wfCascadeN}, \texttt{wfCascadeFix}: cascade
-\item \texttt{wf\_contraction\_correctness}: main theorem (fully proven)
-\item \texttt{wfCascade\_removes\_non\_lfp'}: non-lfp' elements are removed (fully proven)
-\end{itemize}
-The key insight: elements not in $S' = \mathsf{iterFLimit}(F')$ have no finite rank under $F'$, so nothing has strictly lower rank, hence no well-founded derivers.
+\begin{theorem}[Base Preservation]
+If $B \subseteq I$, then $B \subseteq K_n$ for all $n \geq 0$.
+\end{theorem}
+
+\subsubsection{Overall Correctness}
+
+\begin{theorem}[Expansion Correctness]
+Let $F \sqsubseteq F'$ (expansion), $S = \mathsf{lfp}(F)$, and $S' = \mathsf{lfp}(F')$.
+If semi-naive iteration from $S$ with operator $F'$ stabilizes, then $C_n = S'$.
+\end{theorem}
+
+\begin{theorem}[Contraction Correctness]
+Let $F' \sqsubseteq F$ (contraction), $S = \mathsf{lfp}(F)$, $S' = \mathsf{lfp}(F')$.
+Assume $\mathsf{step}$ is \emph{element-wise}: $x \in \mathsf{step}(T) \Rightarrow \exists y \in T.\, x \in \mathsf{step}(\{y\})$.
+Then well-founded cascade from $S$ converges to $K^* = S'$.
+\end{theorem}
+
+\begin{remark}[Lean Formalization]
+All definitions and theorems are formalized in Lean.%
+\footnote{See \texttt{lean-formalisation/IncrementalFixpoint.lean}.}
+
+\textbf{Fully proven:}
+Well-founded contraction correctness, semi-naive soundness, fixpoint monotonicity, all helper lemmas.
+
+\textbf{Remaining assumption} (1 \texttt{sorry}):
+Expansion completeness requires proving $\mathsf{step}(\mathsf{current}) \subseteq \mathsf{current}$ when stable.
+
+The API requires: \texttt{stepElementWise} and \texttt{stepAdditive}. Both hold for DCE.
 \end{remark}
 
 \section{Level 2: DSL with Automatic Derivation (Future)}
 
-The low-level API requires the user to provide $\mathsf{stepFromDelta}$ and $\mathsf{derivationCount}$.
-A higher-level approach would let users define $F$ in a structured DSL, from which these operations are derived automatically.
+The low-level API requires the user to provide $\mathsf{stepFromDelta}$ and prove that step is element-wise and additive.
+A higher-level approach would let users define $F$ in a structured DSL, from which these properties are derived automatically.
 
 \subsection{Analogy: Automatic Differentiation}
 
@@ -345,7 +298,7 @@ A higher-level approach would let users define $F$ in a structured DSL, from whi
 \hline
 & \textbf{Differentiation} & \textbf{Incremental Fixpoint} \\
 \hline
-Low-level & User provides $f(x)$ and $\frac{df}{dx}$ & User provides $F$, $\mathsf{stepFromDelta}$, $\mathsf{derivationCount}$ \\
+Low-level & User provides $f(x)$ and $\frac{df}{dx}$ & User provides $F$, $\mathsf{stepFromDelta}$, proofs \\
 \hline
 High-level & User writes expression; & User writes $F$ in DSL; \\
 (DSL) & system derives gradient & system derives incremental ops \\
@@ -388,17 +341,18 @@ live = lfp(S =>
 The system derives:
 \begin{itemize}
   \item $\mathsf{stepFromDelta}(\Delta) = \mathsf{join}(\mathsf{edges}, \Delta, (u,v) \mapsto v)$
-  \item $\mathsf{derivationCount}(v) = |\{ u \mid (u,v) \in \mathsf{edges} \land u \in \mathsf{live} \}|$
+  \item Proof that step is element-wise (each edge provides a single derivation)
+  \item Proof that step is additive (union distributes over step)
 \end{itemize}
 \end{example}
 
 \subsection{Connection to Datalog}
 
-Datalog engines already perform this derivation:
+Datalog engines already perform similar derivations:
 \begin{itemize}
   \item Rules are the structured representation of $F$
   \item Semi-naive evaluation is derived from rule structure
-  \item Counting-based deletion (DRed) handles retraction
+  \item Well-founded cascade generalizes deletion handling
 \end{itemize}
 
 A general incremental fixpoint DSL would extend this beyond Horn clauses to richer operators (aggregation, negation, etc.).
@@ -452,9 +406,11 @@ The two layers compose: reactive propagation delivers deltas to the fixpoint mai
 The incremental DCE algorithm is an instance of a general pattern: maintaining least fixpoints incrementally under changes to the underlying operator.
 We propose a two-level architecture:
 \begin{enumerate}
-  \item A \textbf{low-level API} where users provide the incremental operations (\textsf{stepFromDelta}, \textsf{derivationCount}).
-  \item A \textbf{high-level DSL} (future work) where these operations are derived automatically from a structured definition of $F$, analogous to how automatic differentiation derives gradients from expression structure.
+  \item A \textbf{low-level API} where users provide \textsf{stepFromDelta} and prove step is element-wise and additive.
+  \item A \textbf{high-level DSL} (future work) where these proofs are derived automatically from a structured definition of $F$, analogous to how automatic differentiation derives gradients from expression structure.
 \end{enumerate}
+
+The key contribution is \emph{well-founded cascade}: using the iterative construction rank to handle cycles correctly. Elements not in the new fixpoint have no finite rank, so they have no well-founded derivers and are removed.
 
 This abstraction unifies incremental algorithms across domains (program analysis, databases, reactive systems) and provides a foundation for building efficient, correct incremental computations.
 

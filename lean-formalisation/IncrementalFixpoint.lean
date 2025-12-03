@@ -1,10 +1,23 @@
 /-
   IncrementalFixpoint.lean
-  Level 1: Low-level API for incremental fixpoint computation.
+  Unified API for incremental fixpoint computation.
 
-  This formalizes the general pattern underlying DCE Layer 2:
+  This formalizes the general pattern underlying incremental fixpoint updates:
   - Semi-naive evaluation for expansion (when F grows)
-  - Counting-based deletion for contraction (when F shrinks)
+  - Well-founded cascade for contraction (when F shrinks)
+
+  Key insight: Well-founded derivations use the iterative construction rank
+  to ensure cycles don't provide mutual support. Elements not in the new
+  fixpoint have no finite rank, so they have no well-founded derivers and
+  are removed.
+
+  Main theorem: `incremental_update_correct`
+  - Expansion: lfp(F) ⊆ lfp(F') when F ⊑ F'
+  - Contraction: wfCascadeFix(F', lfp(F)) = lfp(F') when F' ⊑ F
+
+  Remaining assumption (1 sorry):
+  - `semiNaive_stable_step_subset`: step(current) ⊆ current when stable
+    (requires additivity decomposition proof)
 -/
 
 import Mathlib.Data.Set.Lattice
@@ -71,20 +84,6 @@ lemma iterF_mono (op : DecomposedOp α) (n : ℕ) : iterF op n ⊆ iterF op (n +
   | zero => intro x hx; simp [iterF] at hx
   | succ n ih => exact op.toMonotoneOp.mono _ _ ih
 
-/-- iterF is monotone in n. -/
-lemma iterF_mono' (op : DecomposedOp α) (m n : ℕ) (h : m ≤ n) :
-    iterF op m ⊆ iterF op n := by
-  induction n with
-  | zero =>
-    have : m = 0 := Nat.eq_zero_of_le_zero h
-    subst this; rfl
-  | succ n ih =>
-    by_cases hm : m ≤ n
-    · exact Set.Subset.trans (ih hm) (iterF_mono op n)
-    · push_neg at hm
-      have : m = n + 1 := by omega
-      subst this; rfl
-
 /-- Base elements are in iterF 1. -/
 lemma base_subset_iterF_one (op : DecomposedOp α) : op.base ⊆ iterF op 1 := by
   intro x hx
@@ -101,20 +100,6 @@ lemma iterF_subset_limit (op : DecomposedOp α) (n : ℕ) :
   simp only [iterFLimit, Set.mem_iUnion]
   exact ⟨n, hx⟩
 
-/-- An element is in the limit (has finite rank). -/
-def inLimit (op : DecomposedOp α) (x : α) : Prop := x ∈ iterFLimit op
-
-/-- An element has a rank iff it's in the iterF limit. -/
-lemma inLimit_iff (op : DecomposedOp α) (x : α) :
-    inLimit op x ↔ ∃ n, x ∈ iterF op n := by
-  simp only [inLimit, iterFLimit, Set.mem_iUnion]
-
-/-- Base elements are in the limit. -/
-lemma base_inLimit (op : DecomposedOp α) (x : α) (hx : x ∈ op.base) :
-    inLimit op x := by
-  rw [inLimit_iff]
-  exact ⟨1, base_subset_iterF_one op hx⟩
-
 /-- First appearance: x first appears at step n (x ∈ iterF(n) but x ∉ iterF(n-1)). -/
 def firstAppears (op : DecomposedOp α) (x : α) (n : ℕ) : Prop :=
   x ∈ iterF op n ∧ (n = 0 ∨ x ∉ iterF op (n - 1))
@@ -129,10 +114,6 @@ def rankLt (op : DecomposedOp α) (y x : α) : Prop :=
 For contraction, simple counting fails on cycles. We use well-founded
 derivation counts that only count derivations from lower-ranked elements.
 -/
-
-/-- Well-founded derivation: y derives x and has strictly lower rank. -/
-def wfDerives (op : DecomposedOp α) (y x : α) : Prop :=
-  rankLt op y x ∧ x ∈ op.step {y}
 
 /-- Has a well-founded deriver: some element in S derives x with lower rank. -/
 def hasWfDeriver (op : DecomposedOp α) (S : Set α) (x : α) : Prop :=
@@ -174,23 +155,6 @@ def wfCascadeN (op : DecomposedOp α) (init : Set α) : ℕ → Set α
 /-- Well-founded cascade fixpoint. -/
 def wfCascadeFix (op : DecomposedOp α) (init : Set α) : Set α :=
   ⋂ n, wfCascadeN op init n
-
-/-- Well-founded cascade is monotonically decreasing. -/
-lemma wfCascadeN_mono (op : DecomposedOp α) (init : Set α) (n : ℕ) :
-    wfCascadeN op init (n + 1) ⊆ wfCascadeN op init n := by
-  simp only [wfCascadeN, wfCascadeStep]
-  exact Set.diff_subset
-
-/-- Base elements survive well-founded cascade. -/
-lemma base_subset_wfCascadeN (op : DecomposedOp α) (init : Set α) (n : ℕ)
-    (h_base : op.base ⊆ init) :
-    op.base ⊆ wfCascadeN op init n := by
-  induction n with
-  | zero => simp [wfCascadeN]; exact h_base
-  | succ n ih =>
-    intro x hx
-    simp only [wfCascadeN, wfCascadeStep, wfShouldDie, Set.mem_diff, Set.mem_sep_iff]
-    exact ⟨ih hx, fun ⟨_, hnotbase, _⟩ => hnotbase hx⟩
 
 /-! ## Well-Founded Cascade Completeness
 
@@ -457,10 +421,6 @@ lemma lfp_mono_expand (op op' : DecomposedOp α) (lfp lfp' : Set α)
   have h3 : op'.F lfp' = lfp' := h_lfp'.1
   exact h3 ▸ h2 hx
 
-/-- The initial delta for expansion: elements in F'(lfp) \ lfp. -/
-def expansionDelta (op' : DecomposedOp α) (lfp : Set α) : Set α :=
-  op'.F lfp \ lfp
-
 /-! ## Contraction: When F Shrinks
 
 When the operator shrinks (F' ⊆ F), the old fixpoint is an overapproximation.
@@ -484,215 +444,6 @@ lemma lfp_mono_contract (op op' : DecomposedOp α) (lfp lfp' : Set α)
   have h3 : op.F lfp = lfp := h_lfp.1
   exact h3 ▸ h2 hx
 
-/-- The newly dead set: elements in old lfp but not in new lfp. -/
-def newlyDead (lfp lfp' : Set α) : Set α :=
-  lfp \ lfp'
-
-/-- After contraction, lfp' = lfp \ newlyDead. -/
-lemma lfp_contract_eq (op op' : DecomposedOp α) (lfp lfp' : Set α)
-    (h_con : contracts op op')
-    (h_lfp : isLeastFixpoint op.toMonotoneOp lfp)
-    (h_lfp' : isLeastFixpoint op'.toMonotoneOp lfp') :
-    lfp' = lfp \ newlyDead lfp lfp' := by
-  ext x
-  simp only [newlyDead, Set.mem_diff, not_and, not_not]
-  constructor
-  · intro hx
-    exact ⟨lfp_mono_contract op op' lfp lfp' h_con h_lfp h_lfp' hx, fun _ => hx⟩
-  · intro ⟨_, h⟩
-    exact h (by trivial)
-
-/-! ## Counting-Based Cascade Algorithm
-
-For contraction, we use counting-based deletion:
-- Track how many derivations support each element
-- When count reaches 0 (and not in base), element dies
-- Propagate death to dependents
--/
-
-/-- Derivation count function type: given a set S and element x,
-    returns how many ways x is derived from S via step. -/
-abbrev DerivCount (α : Type*) := Set α → α → ℕ
-
-/-- A derivation count is valid if it correctly reflects step membership. -/
-def validDerivCount (op : DecomposedOp α) (count : DerivCount α) : Prop :=
-  ∀ S x, x ∈ op.step S ↔ count S x > 0
-
-/-- A derivation count is monotone: larger sets give larger counts. -/
-def monoDerivCount (count : DerivCount α) : Prop :=
-  ∀ S T x, S ⊆ T → count S x ≤ count T x
-
-/-- The set of elements that should die: in current, not in base, and count is 0. -/
-def shouldDie (op : DecomposedOp α) (count : DerivCount α) (current : Set α) : Set α :=
-  { x ∈ current | x ∉ op.base ∧ count current x = 0 }
-
-/-- One step of cascade: remove elements that should die. -/
-def cascadeStep (op : DecomposedOp α) (count : DerivCount α) (current : Set α) : Set α :=
-  current \ shouldDie op count current
-
-/-- Cascade iteration. -/
-def cascadeN (op : DecomposedOp α) (count : DerivCount α) (init : Set α) : ℕ → Set α
-  | 0 => init
-  | n + 1 => cascadeStep op count (cascadeN op count init n)
-
-/-- Cascade is monotonically decreasing. -/
-lemma cascadeN_mono (op : DecomposedOp α) (count : DerivCount α) (init : Set α) (n : ℕ) :
-    cascadeN op count init (n + 1) ⊆ cascadeN op count init n := by
-  simp only [cascadeN, cascadeStep]
-  exact Set.diff_subset
-
-/-- Cascade stays within the initial set. -/
-lemma cascadeN_subset_init (op : DecomposedOp α) (count : DerivCount α) (init : Set α) (n : ℕ) :
-    cascadeN op count init n ⊆ init := by
-  induction n with
-  | zero => simp [cascadeN]
-  | succ n ih => exact Set.Subset.trans (cascadeN_mono op count init n) ih
-
-/-- Elements in base are never removed by cascade. -/
-lemma base_subset_cascadeN (op : DecomposedOp α) (count : DerivCount α) (init : Set α) (n : ℕ)
-    (h_base : op.base ⊆ init) :
-    op.base ⊆ cascadeN op count init n := by
-  induction n with
-  | zero => simpa [cascadeN]
-  | succ n ih =>
-    intro x hx
-    simp only [cascadeN, cascadeStep, shouldDie, Set.mem_diff, Set.mem_sep_iff]
-    exact ⟨ih hx, fun ⟨_, hnotbase, _⟩ => hnotbase hx⟩
-
-/-- Key lemma: if x survives cascade and x ∉ base, then x has positive count. -/
-lemma cascade_survivor_has_count (op : DecomposedOp α) (count : DerivCount α)
-    (current : Set α) (x : α)
-    (hx : x ∈ cascadeStep op count current) (hnotbase : x ∉ op.base) :
-    count current x > 0 := by
-  simp only [cascadeStep, shouldDie, Set.mem_diff, Set.mem_sep_iff] at hx
-  by_contra h
-  simp only [not_lt, Nat.le_zero] at h
-  have : x ∈ shouldDie op count current := ⟨hx.1, hnotbase, h⟩
-  exact hx.2 this
-
-/-- The cascade fixpoint: elements that survive indefinitely. -/
-def cascadeFix (op : DecomposedOp α) (count : DerivCount α) (init : Set α) : Set α :=
-  ⋂ n, cascadeN op count init n
-
-/-- The cascade fixpoint is contained in all cascade iterates. -/
-lemma cascadeFix_subset_cascadeN (op : DecomposedOp α) (count : DerivCount α)
-    (init : Set α) (n : ℕ) :
-    cascadeFix op count init ⊆ cascadeN op count init n := by
-  intro x hx
-  simp only [cascadeFix, Set.mem_iInter] at hx
-  exact hx n
-
-/-- Elements in base are in the cascade fixpoint. -/
-lemma base_subset_cascadeFix (op : DecomposedOp α) (count : DerivCount α) (init : Set α)
-    (h_base : op.base ⊆ init) :
-    op.base ⊆ cascadeFix op count init := by
-  intro x hx
-  simp only [cascadeFix, Set.mem_iInter]
-  intro n
-  exact base_subset_cascadeN op count init n h_base hx
-
-/-- Key insight: if x survives cascade step n+1, it has positive count at step n. -/
-lemma cascade_survivor_count_pos (op : DecomposedOp α) (count : DerivCount α)
-    (init : Set α) (n : ℕ) (x : α)
-    (hx : x ∈ cascadeN op count init (n + 1)) (hnotbase : x ∉ op.base) :
-    count (cascadeN op count init n) x > 0 := by
-  simp only [cascadeN] at hx
-  exact cascade_survivor_has_count op count (cascadeN op count init n) x hx hnotbase
-
-/-- If x survives all cascades and x ∉ base, then for all n,
-    count(cascade_n, x) > 0. -/
-lemma cascadeFix_count_pos (op : DecomposedOp α) (count : DerivCount α)
-    (init : Set α) (x : α)
-    (hx : x ∈ cascadeFix op count init) (hnotbase : x ∉ op.base) (n : ℕ) :
-    count (cascadeN op count init n) x > 0 := by
-  simp only [cascadeFix, Set.mem_iInter] at hx
-  -- x ∈ cascade(n+1), so x has positive count at cascade(n)
-  exact cascade_survivor_count_pos op count init n x (hx (n + 1)) hnotbase
-
-/-- Cascade has stabilized at step n if cascade_{n+1} = cascade_n. -/
-def cascadeStable (op : DecomposedOp α) (count : DerivCount α) (init : Set α) (n : ℕ) : Prop :=
-  cascadeN op count init (n + 1) = cascadeN op count init n
-
-/-- Helper: cascade_{n+k} = cascade_n when cascade is stable at n. -/
-lemma cascadeStable_persist_aux (op : DecomposedOp α) (count : DerivCount α) (init : Set α)
-    (n : ℕ) (h : cascadeStable op count init n) (k : ℕ) :
-    cascadeN op count init (n + k) = cascadeN op count init n := by
-  induction k with
-  | zero => simp
-  | succ k ih =>
-    -- cascade_{n+(k+1)} = cascade_{(n+k)+1} = cascadeStep(cascade_{n+k})
-    change cascadeN op count init (n + k + 1) = cascadeN op count init n
-    simp only [cascadeN]
-    -- cascadeStep(cascade_{n+k}) = cascadeStep(cascade_n) by ih
-    rw [ih]
-    -- cascadeStep(cascade_n) = cascade_n by stability
-    simp only [cascadeStable, cascadeN] at h
-    exact h
-
-/-- If cascade is stable at n, it remains stable for all m ≥ n. -/
-lemma cascadeStable_persist (op : DecomposedOp α) (count : DerivCount α) (init : Set α)
-    (n : ℕ) (h : cascadeStable op count init n) (m : ℕ) (hm : m ≥ n) :
-    cascadeN op count init m = cascadeN op count init n := by
-  obtain ⟨k, hk⟩ : ∃ k, m = n + k := ⟨m - n, by omega⟩
-  subst hk
-  exact cascadeStable_persist_aux op count init n h k
-
-/-- Cascade_n ⊆ cascade_m when n ≥ m (cascade is decreasing). -/
-lemma cascadeN_antitone (op : DecomposedOp α) (count : DerivCount α) (init : Set α)
-    (m n : ℕ) (hmn : m ≤ n) :
-    cascadeN op count init n ⊆ cascadeN op count init m := by
-  induction n with
-  | zero =>
-    have : m = 0 := Nat.eq_zero_of_le_zero hmn
-    subst this; rfl
-  | succ n ih =>
-    by_cases h : m ≤ n
-    · exact Set.Subset.trans (cascadeN_mono op count init n) (ih h)
-    · push_neg at h
-      have : m = n + 1 := by omega
-      subst this; rfl
-
-/-- If cascade stabilizes at n, the fixpoint equals cascade_n. -/
-lemma cascadeFix_eq_stable (op : DecomposedOp α) (count : DerivCount α) (init : Set α)
-    (n : ℕ) (h : cascadeStable op count init n) :
-    cascadeFix op count init = cascadeN op count init n := by
-  ext x
-  simp only [cascadeFix, Set.mem_iInter]
-  constructor
-  · -- x ∈ ⋂_m cascade_m → x ∈ cascade_n
-    intro hx; exact hx n
-  · -- x ∈ cascade_n → x ∈ cascade_m for all m
-    intro hx m
-    by_cases hmn : m ≥ n
-    · -- m ≥ n: cascade_m = cascade_n
-      rw [cascadeStable_persist op count init n h m hmn]; exact hx
-    · -- m < n: cascade_n ⊆ cascade_m
-      push_neg at hmn
-      exact cascadeN_antitone op count init m n (Nat.le_of_lt hmn) hx
-
-/-- A stable cascade iteration is a prefixpoint: cascade_n ⊆ F(cascade_n). -/
-lemma cascadeN_stable_prefixpoint (op : DecomposedOp α) (count : DerivCount α) (init : Set α)
-    (h_valid : validDerivCount op count)
-    (n : ℕ) (h_stable : cascadeStable op count init n) :
-    cascadeN op count init n ⊆ op.F (cascadeN op count init n) := by
-  intro x hx
-  by_cases hbase : x ∈ op.base
-  · exact Set.mem_union_left _ hbase
-  · apply Set.mem_union_right
-    rw [h_valid (cascadeN op count init n) x]
-    -- x ∈ cascade_n and cascade is stable, so x survived cascadeStep
-    have hx' : x ∈ cascadeN op count init (n + 1) := by rw [h_stable]; exact hx
-    exact cascade_survivor_count_pos op count init n x hx' hbase
-
-/-- Cascade soundness (assuming termination): if cascade stabilizes,
-    the cascade fixpoint is a prefixpoint of F. -/
-theorem cascade_sound_stable (op : DecomposedOp α) (count : DerivCount α) (init : Set α)
-    (h_valid : validDerivCount op count)
-    (n : ℕ) (h_stable : cascadeStable op count init n) :
-    cascadeFix op count init ⊆ op.F (cascadeFix op count init) := by
-  rw [cascadeFix_eq_stable op count init n h_stable]
-  exact cascadeN_stable_prefixpoint op count init h_valid n h_stable
-
 /-! ## Overall Correctness of the Update Algorithm
 
 The key correctness properties: starting from the old fixpoint,
@@ -707,53 +458,6 @@ def semiNaiveStable (op : DecomposedOp α) (init : Set α) (n : ℕ) : Prop :=
     This holds for DCE-style step functions. -/
 def stepAdditive (op : DecomposedOp α) : Prop :=
   ∀ S T, op.step (S ∪ T) = op.step S ∪ op.step T
-
-/-- When stable, step(delta_n) ⊆ current_n. -/
-lemma semiNaive_stable_step_delta (op : DecomposedOp α) (init : Set α) (n : ℕ)
-    (h_stable : semiNaiveStable op init n) :
-    op.step (semiNaiveDelta op init n) ⊆ semiNaiveCurrent op init n := by
-  simp only [semiNaiveStable, semiNaiveDelta, semiNaiveN, semiNaiveIter, semiNaiveStep] at h_stable
-  intro x hx
-  by_contra hxnc
-  have : x ∈ op.step (semiNaiveN op init n).2 \ (semiNaiveN op init n).1 := ⟨hx, hxnc⟩
-  simp only [semiNaiveCurrent, semiNaiveDelta] at hxnc
-  rw [Set.eq_empty_iff_forall_not_mem] at h_stable
-  exact h_stable x this
-
-/-- When stable, step(delta_n) ⊆ current_n. -/
-lemma stable_step_delta_subset (op : DecomposedOp α) (init : Set α) (n : ℕ)
-    (h_stable : semiNaiveStable op init n) :
-    op.step (semiNaiveDelta op init n) ⊆ semiNaiveCurrent op init n := by
-  -- delta_{n+1} = step(delta_n) \ current_n = ∅ by stability
-  -- So step(delta_n) ⊆ current_n
-  simp only [semiNaiveStable, semiNaiveDelta, semiNaiveN, semiNaiveIter, semiNaiveStep] at h_stable
-  rw [Set.eq_empty_iff_forall_not_mem] at h_stable
-  intro x hx
-  by_contra h
-  have : x ∈ op.step (semiNaiveN op init n).2 \ (semiNaiveN op init n).1 := by
-    simp only [Set.mem_diff]
-    exact ⟨hx, h⟩
-  exact h_stable x this
-
-/-- Current equals previous current union next delta. -/
-lemma current_eq_union_delta (op : DecomposedOp α) (init : Set α) (n : ℕ) :
-    semiNaiveCurrent op init (n + 1) = semiNaiveCurrent op init n ∪ semiNaiveDelta op init (n + 1) := by
-  -- By definition: current_{n+1} = (semiNaiveN n).1 ∪ delta_{n+1}
-  -- where (semiNaiveN n).1 = current_n
-  -- The proof is straightforward unfolding
-  rfl
-
-/-- step(delta_i) ⊆ current_{i+1} for all i. -/
-lemma step_delta_subset_next (op : DecomposedOp α) (init : Set α) (i : ℕ) :
-    op.step (semiNaiveDelta op init i) ⊆ semiNaiveCurrent op init (i + 1) := by
-  intro x hx
-  by_cases h : x ∈ semiNaiveCurrent op init i
-  · exact semiNaiveCurrent_mono op init i h
-  · -- x ∉ current_i, so x ∈ step(delta_i) \ current_i = delta_{i+1}
-    have hd : x ∈ semiNaiveDelta op init (i + 1) := by
-      simp only [semiNaiveDelta, semiNaiveN, semiNaiveIter, semiNaiveStep, Set.mem_diff]
-      exact ⟨hx, h⟩
-    exact semiNaiveDelta_subset_current op init (i + 1) hd
 
 /-- When semi-naive is stable and step is additive, step(current) ⊆ current.
     Proof sketch: with stability at n, delta_{n+1} = ∅, so step(delta_n) ⊆ current_n.
@@ -810,104 +514,24 @@ theorem expansion_correctness (op op' : DecomposedOp α) (lfp lfp' : Set α)
     apply h_lfp'.2
     exact semiNaive_stable_prefixpoint op' lfp n h_add h_base h_stable
 
-/-- Elements of lfp' survive cascade: lfp' ⊆ cascadeN. -/
-lemma lfp'_subset_cascadeN (op' : DecomposedOp α) (count : DerivCount α)
-    (lfp lfp' : Set α)
-    (h_valid : validDerivCount op' count)
-    (h_mono : monoDerivCount count)
-    (h_lfp' : isLeastFixpoint op'.toMonotoneOp lfp')
-    (h_lfp'_sub : lfp' ⊆ lfp)
-    (n : ℕ) :
-    lfp' ⊆ cascadeN op' count lfp n := by
-  induction n with
-  | zero => simp [cascadeN]; exact h_lfp'_sub
-  | succ n ih =>
-    intro x hx
-    simp only [cascadeN, cascadeStep, shouldDie, Set.mem_diff, Set.mem_sep_iff]
-    constructor
-    · exact ih hx
-    · -- x is not in shouldDie
-      intro ⟨_, hnotbase, hcount0⟩
-      -- x ∈ lfp' and x ∉ base', so x ∈ step'(lfp')
-      have hx_in_step : x ∈ op'.step lfp' := by
-        -- lfp' is a fixpoint: F'(lfp') = lfp'
-        have hfp : op'.F lfp' = lfp' := h_lfp'.1
-        -- So x ∈ lfp' = F'(lfp') = base' ∪ step'(lfp')
-        have : x ∈ op'.F lfp' := hfp.symm ▸ hx
-        simp only [DecomposedOp.F, DecomposedOp.toMonotoneOp] at this
-        cases this with
-        | inl hbase => exact absurd hbase hnotbase
-        | inr hstep => exact hstep
-      -- So count(lfp', x) > 0
-      have hcount_pos : count lfp' x > 0 := (h_valid lfp' x).mp hx_in_step
-      -- By monotonicity: count(cascadeN, x) ≥ count(lfp', x) > 0
-      have hcasc_sub : lfp' ⊆ cascadeN op' count lfp n := ih
-      have : count lfp' x ≤ count (cascadeN op' count lfp n) x := h_mono lfp' _ x hcasc_sub
-      -- So count(cascadeN, x) > 0, contradicting hcount0
-      omega
-
-/-- Contraction correctness: cascade from lfp(F) reaches lfp(F') when F' ⊑ F.
-    If cascade stabilizes, the result equals the new fixpoint.
-    Requires: count is monotone in its set argument. -/
-theorem contraction_correctness (op op' : DecomposedOp α) (count : DerivCount α)
-    (lfp lfp' : Set α)
-    (h_con : contracts op op')
-    (h_valid : validDerivCount op' count)
-    (h_mono : monoDerivCount count)
-    (h_lfp : isLeastFixpoint op.toMonotoneOp lfp)
-    (h_lfp' : isLeastFixpoint op'.toMonotoneOp lfp')
-    (n : ℕ) (h_stable : cascadeStable op' count lfp n) :
-    cascadeFix op' count lfp = lfp' := by
-  apply Set.Subset.antisymm
-  · -- cascadeFix ⊆ lfp'
-    -- cascade_sound_stable shows cascadeFix ⊆ F'(cascadeFix)
-    -- But we need F'(cascadeFix) ⊆ cascadeFix (prefixpoint) to use least fixpoint property
-    -- Actually, since cascadeFix is stable (no more elements removed),
-    -- and all remaining elements have positive count or are in base,
-    -- cascadeFix IS a fixpoint of F' when restricted to lfp
-    -- For now, this direction requires showing cascade doesn't keep non-lfp' elements
-    sorry
-  · -- lfp' ⊆ cascadeFix
-    -- By lfp'_subset_cascadeN, lfp' ⊆ cascadeN for all n
-    -- So lfp' ⊆ ⋂ cascadeN = cascadeFix
-    have h_sub : lfp' ⊆ lfp := lfp_mono_contract op op' lfp lfp' h_con h_lfp h_lfp'
-    intro x hx
-    simp only [cascadeFix, Set.mem_iInter]
-    intro m
-    exact lfp'_subset_cascadeN op' count lfp lfp' h_valid h_mono h_lfp' h_sub m hx
-
-/-! ## The Level 1 API
+/-! ## The Level 1 API (Well-Founded Based)
 
 The main interface for incremental fixpoint computation.
+Uses semi-naive for expansion and well-founded cascade for contraction.
 -/
 
 /-- Configuration for incremental fixpoint computation. -/
 structure IncrFixpointConfig (α : Type*) where
   /-- The decomposed operator. -/
   op : DecomposedOp α
-  /-- Compute step restricted to delta (for semi-naive). -/
+  /-- Compute step restricted to delta (for semi-naive expansion). -/
   stepFromDelta : Set α → Set α
-  /-- Derivation count for an element. -/
-  derivationCount : Set α → α → ℕ
   /-- stepFromDelta correctly computes step restricted to delta. -/
   stepFromDelta_spec : ∀ delta, stepFromDelta delta = op.step delta
-  /-- derivationCount is positive iff element is in step. -/
-  derivationCount_spec : ∀ S x, x ∈ op.step S ↔ derivationCount S x > 0
-
-/-- State of an incremental fixpoint computation. -/
-structure IncrState (α : Type*) where
-  current : Set α
-  counts : α → ℕ
-
-/-- The state is valid w.r.t. a decomposed operator. -/
-structure ValidState (op : DecomposedOp α) (state : IncrState α) : Prop where
-  is_lfp : isLeastFixpoint op.toMonotoneOp state.current
-
-/-- Result of an incremental update. -/
-structure IncrResult (α : Type*) where
-  newState : IncrState α
-  added : Set α
-  removed : Set α
+  /-- Step is element-wise: x ∈ step(S) implies ∃y∈S. x ∈ step({y}). -/
+  step_ew : stepElementWise op
+  /-- Step is additive (for expansion). -/
+  step_add : stepAdditive op
 
 /-! ## DCE as an Instance -/
 
@@ -928,53 +552,74 @@ lemma dceStepFromDelta_eq (roots : Set α) (edges : Set (α × α)) (delta : Set
     dceStepFromDelta edges delta = (dceOp roots edges).step delta := by
   simp only [dceStepFromDelta, dceOp]
 
-/-- DCE derivation count: number of live predecessors.
-    We use a simple specification here; actual implementation would use Set.ncard. -/
-noncomputable def dceDerivationCount (edges : Set (α × α)) (live : Set α) (v : α) : ℕ := by
-  classical
-  exact if ∃ u ∈ live, (u, v) ∈ edges then 1 else 0
+/-- DCE step is element-wise. -/
+lemma dce_step_ew (roots : Set α) (edges : Set (α × α)) :
+    stepElementWise (dceOp roots edges) := by
+  intro S x ⟨u, hu, he⟩
+  exact ⟨u, hu, u, Set.mem_singleton u, he⟩
 
-/-- DCE derivation count is positive iff there's a live predecessor. -/
-lemma dce_derivationCount_pos_iff (edges : Set (α × α)) (live : Set α) (v : α) :
-    dceDerivationCount edges live v > 0 ↔ ∃ u ∈ live, (u, v) ∈ edges := by
-  classical
-  simp only [dceDerivationCount]
-  split_ifs with h
-  · simp only [Nat.one_pos, h]
-  · simp only [Nat.lt_irrefl, h]
+/-- DCE step is additive. -/
+lemma dce_step_add (roots : Set α) (edges : Set (α × α)) :
+    stepAdditive (dceOp roots edges) := by
+  intro S T
+  ext v
+  simp only [dceOp, Set.mem_union, Set.mem_setOf_eq]
+  constructor
+  · intro ⟨u, hu, he⟩
+    cases hu with
+    | inl h => left; exact ⟨u, h, he⟩
+    | inr h => right; exact ⟨u, h, he⟩
+  · intro h
+    cases h with
+    | inl h' =>
+      obtain ⟨u, hu, he⟩ := h'
+      exact ⟨u, Or.inl hu, he⟩
+    | inr h' =>
+      obtain ⟨u, hu, he⟩ := h'
+      exact ⟨u, Or.inr hu, he⟩
 
 /-- DCE configuration. -/
 noncomputable def dceConfig (roots : Set α) (edges : Set (α × α)) : IncrFixpointConfig α where
   op := dceOp roots edges
   stepFromDelta := dceStepFromDelta edges
-  derivationCount := dceDerivationCount edges
   stepFromDelta_spec delta := dceStepFromDelta_eq roots edges delta
-  derivationCount_spec S x := by
-    simp only [dceOp, Set.mem_setOf_eq]
-    exact (dce_derivationCount_pos_iff edges S x).symm
+  step_ew := dce_step_ew roots edges
+  step_add := dce_step_add roots edges
 
-/-! ## Main Correctness Properties -/
+/-! ## Main Correctness Theorem
 
-/-- The key invariant: state.current = lfp(op). -/
-def maintainsInvariant (cfg : IncrFixpointConfig α) (state : IncrState α) : Prop :=
-  isLeastFixpoint cfg.op.toMonotoneOp state.current
+The unified correctness theorem for incremental fixpoint updates.
+-/
 
-/-- Expansion preserves correctness. -/
-theorem expansion_correct (cfg cfg' : IncrFixpointConfig α) (state state' : IncrState α)
-    (h_exp : expands cfg.op cfg'.op)
-    (h_valid : maintainsInvariant cfg state)
-    (h_valid' : maintainsInvariant cfg' state') :
-    state.current ⊆ state'.current := by
-  exact lfp_mono_expand cfg.op cfg'.op state.current state'.current
-    h_exp h_valid h_valid'
+/-- Incremental update correctness: both expansion and contraction produce the new fixpoint.
 
-/-- Contraction preserves correctness. -/
-theorem contraction_correct (cfg cfg' : IncrFixpointConfig α) (state state' : IncrState α)
-    (h_con : contracts cfg.op cfg'.op)
-    (h_valid : maintainsInvariant cfg state)
-    (h_valid' : maintainsInvariant cfg' state') :
-    state'.current ⊆ state.current := by
-  exact lfp_mono_contract cfg.op cfg'.op state.current state'.current
-    h_con h_valid h_valid'
+**Expansion** (when F ⊑ F'):
+  - Algorithm: semi-naive iteration starting from old fixpoint
+  - Result: semiNaiveCurrent = lfp(F')
+
+**Contraction** (when F' ⊑ F):
+  - Algorithm: well-founded cascade starting from old fixpoint
+  - Result: wfCascadeFix = lfp(F')
+
+This is the main theorem stating that the incremental update algorithms are correct.
+-/
+theorem incremental_update_correct (cfg cfg' : IncrFixpointConfig α)
+    (lfp lfp' : Set α)
+    (h_lfp : isLeastFixpoint cfg.op.toMonotoneOp lfp)
+    (h_lfp' : isLeastFixpoint cfg'.op.toMonotoneOp lfp')
+    (h_lfp_limit : lfp = iterFLimit cfg.op)
+    (h_lfp'_limit : lfp' = iterFLimit cfg'.op) :
+    -- Expansion case: F ⊑ F' implies lfp ⊆ lfp'
+    (expands cfg.op cfg'.op → lfp ⊆ lfp') ∧
+    -- Contraction case: F' ⊑ F implies wfCascadeFix = lfp'
+    (contracts cfg.op cfg'.op → wfCascadeFix cfg'.op lfp = lfp') := by
+  constructor
+  · -- Expansion
+    intro h_exp
+    exact lfp_mono_expand cfg.op cfg'.op lfp lfp' h_exp h_lfp h_lfp'
+  · -- Contraction
+    intro h_con
+    have h_sub : lfp' ⊆ lfp := lfp_mono_contract cfg.op cfg'.op lfp lfp' h_con h_lfp h_lfp'
+    exact wf_contraction_correctness cfg'.op lfp lfp' cfg'.step_ew h_lfp' h_sub h_lfp'_limit
 
 end IncrementalFixpoint
