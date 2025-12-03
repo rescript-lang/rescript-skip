@@ -1,0 +1,282 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage{amsthm}
+
+\newtheorem{definition}{Definition}
+\newtheorem{example}{Example}
+\newtheorem{remark}{Remark}
+
+\title{Incremental Fixpoint Computation:\\A Two-Level Architecture}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We observe that the incremental dead code elimination (DCE) algorithm from our reactive DCE work is an instance of a more general pattern: \emph{incremental fixpoint computation}.
+This note proposes a two-level architecture for incremental fixpoints:
+(1)~a low-level API that assumes user-provided incremental operations, and
+(2)~a potential high-level DSL where these operations are derived automatically from a structured definition of the fixpoint operator.
+The relationship between these levels is analogous to that between manual gradient computation and automatic differentiation.
+\end{abstract}
+
+\section{Motivation: DCE as Incremental Fixpoint}
+
+In reactive DCE, the live set is defined as the least fixpoint of a monotone operator:
+\[
+F_G(S) = G.\mathsf{roots} \cup \{ v \mid \exists u \in S.\, (u,v) \in G.\mathsf{edges} \}
+\]
+That is, $\mathsf{liveSet}(G) = \mathsf{lfp}(F_G)$.
+
+When the graph changes ($G \to G' = G \pm f$), we want to update the fixpoint incrementally rather than recomputing from scratch.
+The key observations are:
+\begin{itemize}
+  \item \textbf{Expansion} ($G \to G \oplus f$): The operator grows, so $\mathsf{lfp}(F_G) \subseteq \mathsf{lfp}(F_{G'})$. The old fixpoint is an underapproximation; we iterate upward.
+  \item \textbf{Contraction} ($G \to G \ominus f$): The operator shrinks, so $\mathsf{lfp}(F_{G'}) \subseteq \mathsf{lfp}(F_G)$. The old fixpoint is an overapproximation; we must remove unjustified elements.
+\end{itemize}
+
+This pattern---incremental maintenance of a least fixpoint under changes to the underlying operator---arises in many domains beyond DCE.
+
+\section{The General Pattern}
+
+\begin{definition}[Monotone Fixpoint Problem]
+Given a complete lattice $(L, \sqsubseteq)$ and a monotone operator $F : L \to L$, the \emph{least fixpoint} is $\mathsf{lfp}(F) = \bigcap \{ x \mid F(x) \sqsubseteq x \}$.
+\end{definition}
+
+For set-based fixpoints (our focus), $L = \mathcal{P}(A)$ for some element type $A$, ordered by $\subseteq$, and $F$ is typically of the form:
+\[
+F(S) = \mathsf{base} \cup \mathsf{step}(S)
+\]
+where $\mathsf{base}$ provides seed elements and $\mathsf{step}$ derives new elements from existing ones.
+
+\begin{definition}[Incremental Fixpoint Problem]
+Given:
+\begin{itemize}
+  \item A current fixpoint $S = \mathsf{lfp}(F)$
+  \item A change that transforms $F$ into $F'$
+\end{itemize}
+Compute $S' = \mathsf{lfp}(F')$ efficiently, in time proportional to $|S' \triangle S|$ rather than $|S'|$.
+\end{definition}
+
+\section{Level 1: Low-Level Incremental Fixpoint API}
+
+The low-level API assumes the user provides the necessary incremental operations.
+
+\subsection{Required Ingredients}
+
+\paragraph{For Semi-Naive Expansion.}
+When $F' \supseteq F$ (the operator grows), we use \emph{semi-naive evaluation}:
+\begin{itemize}
+  \item Maintain the ``delta'' $\Delta S$ = elements added in the last iteration
+  \item Instead of computing $F'(S)$, compute only $\mathsf{stepFromDelta}(\Delta S) \setminus S$
+\end{itemize}
+
+The user provides:
+\[
+\mathsf{stepFromDelta} : \mathsf{Params} \times \mathcal{P}(A) \to \mathcal{P}(A)
+\]
+Given the current parameters and a delta set, return elements derivable from that delta.
+
+\begin{example}[DCE]
+$\mathsf{stepFromDelta}(G, \Delta) = \{ v \mid \exists u \in \Delta.\, (u,v) \in G.\mathsf{edges} \}$
+\end{example}
+
+\paragraph{For Counting-Based Contraction.}
+When $F' \subseteq F$ (the operator shrinks), we use \emph{counting-based deletion}:
+\begin{itemize}
+  \item Track how many ``derivations'' support each element
+  \item When a derivation is removed, decrement the count
+  \item When count reaches zero, remove the element and propagate
+\end{itemize}
+
+The user provides:
+\[
+\mathsf{derivationCount} : \mathsf{Params} \times \mathcal{P}(A) \times A \to \mathbb{N}
+\]
+Given the current fixpoint, how many ways is element $x$ derived?
+
+\begin{example}[DCE]
+$\mathsf{derivationCount}(G, \mathsf{live}, v) = |\{ u \mid (u,v) \in G.\mathsf{edges} \land u \in \mathsf{live} \}|$
+
+This is exactly the \textsf{refcount} maintained by the DCE algorithm.
+\end{example}
+
+\subsection{The API}
+
+\begin{verbatim}
+interface IncrementalFixpoint<A, Params, Delta> {
+  // User provides:
+  base: (params: Params) => Set<A>
+  stepFromDelta: (params: Params, delta: Set<A>) => Set<A>
+  derivationCount: (params: Params, fp: Set<A>, x: A) => Nat
+  applyDelta: (params: Params, delta: Delta) => Params
+  
+  // System provides:
+  current: Set<A>
+  counts: Map<A, Nat>
+  
+  update(delta: Delta): { added: Set<A>, removed: Set<A> }
+}
+\end{verbatim}
+
+\subsection{Update Algorithm}
+
+\paragraph{Expansion.}
+When $F$ grows:
+\begin{enumerate}
+  \item Compute initial delta: $\Delta_0 = F'(\mathsf{current}) \setminus \mathsf{current}$
+  \item Semi-naive iterate:
+    \begin{align*}
+      \Delta_{n+1} &= \mathsf{stepFromDelta}(\Delta_n) \setminus \mathsf{current} \\
+      \mathsf{current} &\gets \mathsf{current} \cup \Delta_{n+1}
+    \end{align*}
+  \item Update derivation counts for new elements
+\end{enumerate}
+
+\paragraph{Contraction.}
+When $F$ shrinks:
+\begin{enumerate}
+  \item Update derivation counts for removed derivations
+  \item Initialize cascade: $Q = \{ x \in \mathsf{current} \mid \mathsf{counts}[x] = 0 \land x \notin \mathsf{base} \}$
+  \item Propagate:
+    \begin{itemize}
+      \item Remove $x$ from current
+      \item Decrement counts of elements derived from $x$
+      \item Add newly-zero elements to $Q$
+    \end{itemize}
+\end{enumerate}
+
+\section{Level 2: DSL with Automatic Derivation (Future)}
+
+The low-level API requires the user to provide $\mathsf{stepFromDelta}$ and $\mathsf{derivationCount}$.
+A higher-level approach would let users define $F$ in a structured DSL, from which these operations are derived automatically.
+
+\subsection{Analogy: Automatic Differentiation}
+
+\begin{center}
+\begin{tabular}{|l|l|l|}
+\hline
+& \textbf{Differentiation} & \textbf{Incremental Fixpoint} \\
+\hline
+Low-level & User provides $f(x)$ and $\frac{df}{dx}$ & User provides $F$, $\mathsf{stepFromDelta}$, $\mathsf{derivationCount}$ \\
+\hline
+High-level & User writes expression; & User writes $F$ in DSL; \\
+(DSL) & system derives gradient & system derives incremental ops \\
+\hline
+Requirement & $f$ given as expression tree & $F$ given as composition of primitives \\
+\hline
+Black-box & Finite differences (slow) & Full recomputation (slow) \\
+\hline
+\end{tabular}
+\end{center}
+
+Just as automatic differentiation requires $f$ to be expressed as a composition of differentiable primitives, automatic incrementalization requires $F$ to be expressed as a composition of ``incrementalizable'' primitives.
+
+\subsection{Potential DSL Primitives}
+
+A DSL for fixpoint operators might include:
+\begin{itemize}
+  \item $\mathsf{const}(B)$: constant base set
+  \item $\mathsf{union}(F_1, F_2)$: union of two operators
+  \item $\mathsf{join}(R, S, \pi)$: join $S$ with relation $R$, project via $\pi$
+  \item $\mathsf{filter}(P, S)$: filter $S$ by predicate $P$
+  \item $\mathsf{lfp}(\lambda S. F(S))$: least fixpoint
+\end{itemize}
+
+Each primitive would come with:
+\begin{itemize}
+  \item Its incremental step function (for semi-naive)
+  \item Its derivation counting semantics (for deletion)
+\end{itemize}
+
+\begin{example}[DCE in DSL]
+\begin{verbatim}
+live = lfp(S => 
+  union(
+    const(roots),
+    join(edges, S, (u, v) => v)
+  )
+)
+\end{verbatim}
+The system derives:
+\begin{itemize}
+  \item $\mathsf{stepFromDelta}(\Delta) = \mathsf{join}(\mathsf{edges}, \Delta, (u,v) \mapsto v)$
+  \item $\mathsf{derivationCount}(v) = |\{ u \mid (u,v) \in \mathsf{edges} \land u \in \mathsf{live} \}|$
+\end{itemize}
+\end{example}
+
+\subsection{Connection to Datalog}
+
+Datalog engines already perform this derivation:
+\begin{itemize}
+  \item Rules are the structured representation of $F$
+  \item Semi-naive evaluation is derived from rule structure
+  \item Counting-based deletion (DRed) handles retraction
+\end{itemize}
+
+A general incremental fixpoint DSL would extend this beyond Horn clauses to richer operators (aggregation, negation, etc.).
+
+\section{Examples Beyond DCE}
+
+The incremental fixpoint pattern applies to many problems:
+
+\begin{center}
+\begin{tabular}{|l|l|l|l|}
+\hline
+\textbf{Problem} & \textbf{Base} & \textbf{Step} & \textbf{Derivation Count} \\
+\hline
+DCE/Reachability & roots & successors & in-degree from live \\
+\hline
+Type Inference & base types & constraint propagation & \# constraints implying type \\
+\hline
+Points-to Analysis & direct assignments & transitive flow & \# flow paths \\
+\hline
+Call Graph & entry points & callees of reachable & \# callers \\
+\hline
+Datalog & base facts & rule application & \# rule firings \\
+\hline
+\end{tabular}
+\end{center}
+
+\section{Relationship to Reactive Systems}
+
+In a reactive system like Skip:
+\begin{itemize}
+  \item \textbf{Layer 1} (reactive aggregation) handles changes to the \emph{parameters} of $F$ (e.g., the graph structure).
+  \item \textbf{Layer 2} (incremental fixpoint) maintains the fixpoint as those parameters change.
+\end{itemize}
+
+The two layers compose: reactive propagation delivers deltas to the fixpoint maintainer, which incrementally updates its state and emits its own deltas (added/removed elements) for downstream consumers.
+
+\section{Future Work}
+
+\begin{enumerate}
+  \item \textbf{Formalize Level 1}: Prove that the semi-naive + counting-deletion algorithm correctly maintains the fixpoint for any valid instantiation.
+  
+  \item \textbf{Design Level 2 DSL}: Define a language of composable fixpoint operators with automatic incrementalization.
+  
+  \item \textbf{Integrate with Skip}: Implement the incremental fixpoint abstraction as a reusable component in the Skip reactive framework.
+  
+  \item \textbf{Explore stratification}: Extend to stratified fixpoints (with negation) where layers must be processed in order.
+  
+  \item \textbf{Benchmark}: Compare incremental vs.\ recompute performance on realistic workloads.
+\end{enumerate}
+
+\section{Conclusion}
+
+The incremental DCE algorithm is an instance of a general pattern: maintaining least fixpoints incrementally under changes to the underlying operator.
+We propose a two-level architecture:
+\begin{enumerate}
+  \item A \textbf{low-level API} where users provide the incremental operations (\textsf{stepFromDelta}, \textsf{derivationCount}).
+  \item A \textbf{high-level DSL} (future work) where these operations are derived automatically from a structured definition of $F$, analogous to how automatic differentiation derives gradients from expression structure.
+\end{enumerate}
+
+This abstraction unifies incremental algorithms across domains (program analysis, databases, reactive systems) and provides a foundation for building efficient, correct incremental computations.
+
+\end{document}
+
