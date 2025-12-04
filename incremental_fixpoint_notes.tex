@@ -578,11 +578,25 @@ The system derives:
 
 \subsection{Connection to Datalog}
 
-Datalog engines already perform similar derivations:
+The incremental fixpoint algorithms draw on ideas from deductive databases and Datalog:
+
 \begin{itemize}
-  \item Rules are the structured representation of $F$
-  \item Semi-naive evaluation is derived from rule structure
-  \item Well-founded cascade generalizes deletion handling
+  \item \textbf{Semi-naive evaluation}: Our expansion algorithm (BFS) is essentially semi-naive 
+        iteration~\cite{bancilhon1986naive}, which computes only the ``delta'' at each iteration 
+        rather than recomputing the full set.
+        
+  \item \textbf{Differential Dataflow}: The delta-based approach to incremental updates is related 
+        to Differential Dataflow~\cite{mcsherry2013differential}, which maintains recursive queries 
+        under changes to input relations.
+        
+  \item \textbf{Well-founded semantics}: The rank-based contraction is inspired by well-founded 
+        semantics~\cite{vangelder1991wellfounded}, where derivations must be ``well-founded'' 
+        (not circular) to count. Our ranks provide a concrete measure: derivers must have 
+        strictly lower rank.
+        
+  \item \textbf{DRed (Delete and Rederive)}: Our contraction algorithm is related to the DRed 
+        algorithm~\cite{gupta1993maintaining} for maintaining materialized views under deletions.
+        DRed over-deletes then rederives; our well-founded cascade is more direct.
 \end{itemize}
 
 A general incremental fixpoint DSL would extend this beyond Horn clauses to richer operators (aggregation, negation, etc.).
@@ -643,5 +657,39 @@ We propose a two-level architecture:
 The key contribution is \emph{well-founded cascade}: using the iterative construction rank to handle cycles correctly. Elements not in the new fixpoint have no finite rank, so they have no well-founded derivers and are removed.
 
 This abstraction unifies incremental algorithms across domains (program analysis, databases, reactive systems) and provides a foundation for building efficient, correct incremental computations.
+
+\begin{thebibliography}{9}
+
+\bibitem{bancilhon1986naive}
+F.~Bancilhon and R.~Ramakrishnan.
+\newblock An amateur's introduction to recursive query processing strategies.
+\newblock In \emph{ACM SIGMOD}, 1986.
+\newblock (Semi-naive evaluation)
+
+\bibitem{mcsherry2013differential}
+F.~McSherry, D.~Murray, R.~Isaacs, and M.~Isard.
+\newblock Differential dataflow.
+\newblock In \emph{CIDR}, 2013.
+\newblock (Incremental recursive computation)
+
+\bibitem{vangelder1991wellfounded}
+A.~Van~Gelder, K.~Ross, and J.~Schlipf.
+\newblock The well-founded semantics for general logic programs.
+\newblock \emph{Journal of the ACM}, 38(3):619--649, 1991.
+\newblock (Well-founded derivation)
+
+\bibitem{gupta1993maintaining}
+A.~Gupta, I.~Mumick, and V.~S.~Subrahmanian.
+\newblock Maintaining views incrementally.
+\newblock In \emph{ACM SIGMOD}, 1993.
+\newblock (DRed algorithm for deletions)
+
+\bibitem{tarski1955lattice}
+A.~Tarski.
+\newblock A lattice-theoretical fixpoint theorem and its applications.
+\newblock \emph{Pacific Journal of Mathematics}, 5(2):285--309, 1955.
+\newblock (Least fixpoint theory)
+
+\end{thebibliography}
 
 \end{document}
