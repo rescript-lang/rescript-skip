@@ -38,9 +38,6 @@
  *   relation in a different form (e.g., reading from external storage).
  */
 
-module Map = Belt.Map
-module Set = Belt.Set
-
 // ============================================================================
 // Types
 // ============================================================================
@@ -53,24 +50,27 @@ module Set = Belt.Set
  * - The underlying Fixpoint algorithm state
  */
 type t = {
-  stepRelation: ref<Map.String.t<Set.String.t>>,
+  stepRelation: ref<Map.t<string, Set.t<string>>>,
   fixpointState: Fixpoint.state<string>,
 }
 
 /**
  * Changes produced by a mutation.
  */
-type changes = Fixpoint.changes
+type changes = Fixpoint.changes<string>
 
 // ============================================================================
 // Internal Helpers
 // ============================================================================
 
 /**
- * Get successors from the internal step relation.
+ * Get successors from the internal step relation, calling f for each.
  */
-let getSuccessors = (stepRelation: Map.String.t<Set.String.t>, source: string): array<string> => {
-  stepRelation->Map.String.getWithDefault(source, Set.String.empty)->Set.String.toArray
+let forEachSuccessor = (stepRelation: Map.t<string, Set.t<string>>, source: string, f: string => unit): unit => {
+  switch stepRelation->Map.get(source) {
+  | Some(targets) => targets->Set.forEach(f)
+  | None => ()
+  }
 }
 
 // ============================================================================
@@ -85,11 +85,13 @@ let getSuccessors = (stepRelation: Map.String.t<Set.String.t>, source: string): 
  */
 let make = (~base: array<string>): t => {
   // Start with empty step relation (ref for closure capture)
-  let stepRelation = ref(Map.String.empty)
+  let stepRelation = ref(Map.make())
 
   // Create fixpoint config that reads from our internal step relation
   let config: Fixpoint.config<string> = {
-    stepFwd: source => getSuccessors(stepRelation.contents, source),
+    stepFwdForEach: (source, f) => {
+      forEachSuccessor(stepRelation.contents, source, f)
+    },
   }
 
   // Create the underlying fixpoint state
@@ -116,7 +118,7 @@ let addToBase = (t: t, element: string): changes => {
   Fixpoint.applyDelta(
     t.fixpointState,
     {
-      ...Fixpoint.emptyDelta,
+      ...Fixpoint.emptyDelta(),
       addedToBase: [element],
     },
   )
@@ -133,7 +135,7 @@ let removeFromBase = (t: t, element: string): changes => {
   Fixpoint.applyDelta(
     t.fixpointState,
     {
-      ...Fixpoint.emptyDelta,
+      ...Fixpoint.emptyDelta(),
       removedFromBase: [element],
     },
   )
@@ -152,14 +154,18 @@ let removeFromBase = (t: t, element: string): changes => {
  */
 let addToStep = (t: t, ~source: string, ~target: string): changes => {
   // Update internal step relation
-  let existing = t.stepRelation.contents->Map.String.getWithDefault(source, Set.String.empty)
-  t.stepRelation := t.stepRelation.contents->Map.String.set(source, existing->Set.String.add(target))
+  let existing = switch t.stepRelation.contents->Map.get(source) {
+  | Some(set) => set
+  | None => Set.make()
+  }
+  existing->Set.add(target)
+  t.stepRelation.contents->Map.set(source, existing)
 
   // Apply delta to fixpoint
   Fixpoint.applyDelta(
     t.fixpointState,
     {
-      ...Fixpoint.emptyDelta,
+      ...Fixpoint.emptyDelta(),
       addedToStep: [(source, target)],
     },
   )
@@ -177,19 +183,20 @@ let addToStep = (t: t, ~source: string, ~target: string): changes => {
  */
 let removeFromStep = (t: t, ~source: string, ~target: string): changes => {
   // Update internal step relation
-  let existing = t.stepRelation.contents->Map.String.getWithDefault(source, Set.String.empty)
-  let newSet = existing->Set.String.remove(target)
-  if Set.String.isEmpty(newSet) {
-    t.stepRelation := t.stepRelation.contents->Map.String.remove(source)
-  } else {
-    t.stepRelation := t.stepRelation.contents->Map.String.set(source, newSet)
+  switch t.stepRelation.contents->Map.get(source) {
+  | Some(existing) =>
+    existing->Set.delete(target)->ignore
+    if existing->Set.size == 0 {
+      t.stepRelation.contents->Map.delete(source)->ignore
+    }
+  | None => ()
   }
 
   // Apply delta to fixpoint
   Fixpoint.applyDelta(
     t.fixpointState,
     {
-      ...Fixpoint.emptyDelta,
+      ...Fixpoint.emptyDelta(),
       removedFromStep: [(source, target)],
     },
   )
@@ -214,18 +221,23 @@ let applyChanges = (
 ): changes => {
   // Update internal step relation for additions
   addedToStep->Array.forEach(((source, target)) => {
-    let existing = t.stepRelation.contents->Map.String.getWithDefault(source, Set.String.empty)
-    t.stepRelation := t.stepRelation.contents->Map.String.set(source, existing->Set.String.add(target))
+    let existing = switch t.stepRelation.contents->Map.get(source) {
+    | Some(set) => set
+    | None => Set.make()
+    }
+    existing->Set.add(target)
+    t.stepRelation.contents->Map.set(source, existing)
   })
 
   // Update internal step relation for removals
   removedToStep->Array.forEach(((source, target)) => {
-    let existing = t.stepRelation.contents->Map.String.getWithDefault(source, Set.String.empty)
-    let newSet = existing->Set.String.remove(target)
-    if Set.String.isEmpty(newSet) {
-      t.stepRelation := t.stepRelation.contents->Map.String.remove(source)
-    } else {
-      t.stepRelation := t.stepRelation.contents->Map.String.set(source, newSet)
+    switch t.stepRelation.contents->Map.get(source) {
+    | Some(existing) =>
+      existing->Set.delete(target)->ignore
+      if existing->Set.size == 0 {
+        t.stepRelation.contents->Map.delete(source)->ignore
+      }
+    | None => ()
     }
   })
 
@@ -292,6 +304,6 @@ let debugInfo = (t: t): {
     "current": info["current"],
     "ranks": info["ranks"],
     "base": info["base"],
-    "stepRelationSize": t.stepRelation.contents->Map.String.size,
+    "stepRelationSize": t.stepRelation.contents->Map.size,
   }
 }

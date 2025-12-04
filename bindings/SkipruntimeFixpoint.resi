@@ -61,7 +61,7 @@ type t
 /**
  * Changes produced by a mutation.
  */
-type changes = Fixpoint.changes
+type changes = Fixpoint.changes<string>
 
 // ============================================================================
 // Creation
@@ -137,6 +137,7 @@ let addToStep: (t, ~source: string, ~target: string) => changes
  * This removes the pair (source, target) meaning "source no longer derives target".
  * 
  * If target has no other well-founded support, it will be removed (contraction).
+ * Elements may be re-derived if they're still reachable via alternative paths.
  * 
  * @param t - The managed fixpoint
  * @param source - The source element
@@ -156,7 +157,8 @@ let removeFromStep: (t, ~source: string, ~target: string) => changes
  * Apply multiple changes at once.
  * 
  * More efficient than calling individual mutation methods when you have
- * multiple changes to apply. Processes contractions before expansions.
+ * multiple changes to apply. Processes contractions first (with re-derivation
+ * to handle stale ranks), then expansions.
  * 
  * @param t - The managed fixpoint
  * @param addedToBase - Elements to add to base

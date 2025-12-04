@@ -13,8 +13,6 @@
  * 
  * Run with: node examples/DCEExample.res.js
  */
-module Set = Belt.Set
-
 // ============================================================================
 // DCE Service (using managed fixpoint)
 // ============================================================================
@@ -62,8 +60,8 @@ let getLiveSet = (service: dceService): array<string> => {
  * Get the current dead set (nodes not in the live set).
  */
 let getDeadSet = (service: dceService): array<string> => {
-  let live = Set.String.fromArray(getLiveSet(service))
-  service.nodes->Array.filter(node => !(live->Set.String.has(node)))
+  let live = Set.fromArray(getLiveSet(service))
+  service.nodes->Array.filter(node => !(live->Set.has(node)))
 }
 
 /**
@@ -190,4 +188,71 @@ let demo = () => {
   log("Demo complete!")
 }
 
+// ============================================================================
+// Demo 2: Alternative Path Survival
+// ============================================================================
+
+let alternativePathDemo = () => {
+  log("")
+  log("Alternative Path Demo")
+  log("=====================")
+  log("(This tests the edge case that required algorithm revision)")
+  log("")
+
+  // Create a graph where 'db' has TWO paths from main:
+  //
+  //   main → api → db
+  //     ↓
+  //   backup → db
+  //
+  // When we remove main → api, db should SURVIVE via main → backup → db
+
+  let service = makeDCEService(
+    ~nodes=["main", "api", "backup", "db"],
+    ~roots=["main"],
+    ~edges=[
+      ("main", ["api", "backup"]),
+      ("api", ["db"]),
+      ("backup", ["db"]),
+    ],
+  )
+
+  log("Graph with redundant paths to db:")
+  log("  main → api → db")
+  log("  main → backup → db")
+  log("")
+
+  logArray("Live set", getLiveSet(service))
+  logArray("Dead set", getDeadSet(service))
+  log("")
+
+  // Remove the direct path main → api
+  log("--- Remove edge main → api ---")
+  log("    (db should survive via backup path)")
+  let changes = removeEdge(service, "main", "api")
+  logArray("Removed", changes.removed)
+  logArray("Live set", getLiveSet(service))
+  log("")
+
+  // Verify db is still live
+  let dbIsLive = getLiveSet(service)->Array.includes("db")
+  if dbIsLive {
+    log("✓ CORRECT: db survived via alternative path (main → backup → db)")
+  } else {
+    log("✗ BUG: db was incorrectly removed!")
+  }
+  log("")
+
+  // Now remove the backup path too - db should die
+  log("--- Remove edge backup → db ---")
+  log("    (now db has no path from main)")
+  let changes2 = removeEdge(service, "backup", "db")
+  logArray("Removed", changes2.removed)
+  logArray("Live set", getLiveSet(service))
+  log("")
+
+  log("Alternative path demo complete!")
+}
+
 demo()
+alternativePathDemo()

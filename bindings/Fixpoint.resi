@@ -20,16 +20,16 @@
  * 
  * Correctness depends on the following guarantees from the caller:
  * 
- * 1. **stepFwd stability**: During any single API call (`make` or `applyDelta`),
- *    `stepFwd(x)` must return consistent results for any `x`. If `stepFwd` reads
- *    from mutable external state that changes during an operation, the algorithm
- *    may produce incorrect results.
+ * 1. **stepFwdForEach stability**: During any single API call (`make` or `applyDelta`),
+ *    `stepFwdForEach(x, f)` must call `f` on consistent successors for any `x`. 
+ *    If it reads from mutable external state that changes during an operation, 
+ *    the algorithm may produce incorrect results.
  * 
  * 2. **Delta accuracy**: When calling `applyDelta`, the delta must accurately
  *    describe changes to the step relation:
- *    - `addedToStep`: pairs (x, y) where y is NOW in stepFwd(x) but wasn't before
- *    - `removedFromStep`: pairs (x, y) where y WAS in stepFwd(x) but no longer is
- *    - `stepFwd` must ALREADY reflect the new state when `applyDelta` is called
+ *    - `addedToStep`: pairs (x, y) where y is NOW a successor of x but wasn't before
+ *    - `removedFromStep`: pairs (x, y) where y WAS a successor of x but no longer is
+ *    - `stepFwdForEach` must ALREADY reflect the new state when `applyDelta` is called
  * 
  * ## Overview
  * 
@@ -47,7 +47,7 @@
  *   Complexity: O(|new elements| + |derivations from new elements|)
  * 
  * - **Contraction**: When F shrinks (base or step decreases), cascade removal using
- *   well-founded derivation (rank-based).
+ *   well-founded derivation (rank-based), followed by re-derivation to handle stale ranks.
  *   Complexity: O(|removed elements| + |derivations to removed elements|)
  * 
  * ## Cycle Handling
@@ -61,10 +61,17 @@
  * ```rescript
  * // Define the step function (e.g., graph successors)
  * // NOTE: edges must be stable during each operation
- * let edges = ref(Map.String.fromArray([("R", ["A"]), ("A", ["B"])]))
+ * let edges = ref(Map.make())
+ * edges.contents->Map.set("R", Set.fromArray(["A"]))
+ * edges.contents->Map.set("A", Set.fromArray(["B"]))
  * 
  * let config: Fixpoint.config<string> = {
- *   stepFwd: node => edges.contents->Map.String.getWithDefault(node, []),
+ *   stepFwdForEach: (node, f) => {
+ *     switch edges.contents->Map.get(node) {
+ *     | Some(successors) => successors->Set.forEach(f)
+ *     | None => ()
+ *     }
+ *   },
  * }
  * 
  * // Create initial fixpoint from base elements
@@ -75,9 +82,9 @@
  * let isLive = Fixpoint.has(state, "A")
  * 
  * // To apply changes: FIRST update edges, THEN call applyDelta
- * edges := edges.contents->Map.String.set("A", ["B", "C"])  // Add edge A→C
+ * edges.contents->Map.get("A")->Option.forEach(s => s->Set.add("C"))
  * let changes = Fixpoint.applyDelta(state, {
- *   ...Fixpoint.emptyDelta,
+ *   ...Fixpoint.emptyDelta(),
  *   addedToStep: [("A", "C")],
  * })
  * ```
@@ -96,13 +103,14 @@
  * Configuration for the fixpoint computation.
  * 
  * The user provides:
- * - `stepFwd`: Forward derivation function. Given element x, returns the set of
- *   elements derived by x (i.e., y such that y ∈ stepFwd(x)).
+ * - `stepFwdForEach`: Iteration function over successors. Given element x and
+ *   callback f, calls f(y) for each y that is a successor of x.
+ *   This is more efficient than returning an array when just iterating.
  * 
  * The inverse function `stepInv` is computed and maintained automatically.
  */
 type config<'a> = {
-  stepFwd: 'a => array<'a>,
+  stepFwdForEach: ('a, 'a => unit) => unit,
 }
 
 /**
@@ -125,27 +133,27 @@ type state<'a>
  * 2. **Changes to step** (derivation pairs added/removed)
  * 
  * A step pair (source, target) means "source derives target",
- * i.e., target ∈ stepFwd(source).
+ * i.e., target is a successor of source.
  */
-type delta = {
+type delta<'a> = {
   /** Elements added to the base set (seeds/roots) */
-  addedToBase: array<string>,
+  addedToBase: array<'a>,
   /** Elements removed from the base set */
-  removedFromBase: array<string>,
-  /** Derivation pairs added: (source, target) means target is now in stepFwd(source) */
-  addedToStep: array<(string, string)>,
-  /** Derivation pairs removed: (source, target) means target was removed from stepFwd(source) */
-  removedFromStep: array<(string, string)>,
+  removedFromBase: array<'a>,
+  /** Derivation pairs added: (source, target) means target is now a successor of source */
+  addedToStep: array<('a, 'a)>,
+  /** Derivation pairs removed: (source, target) means target is no longer a successor of source */
+  removedFromStep: array<('a, 'a)>,
 }
 
 /**
  * Changes produced by applying a delta to the fixpoint.
  */
-type changes = {
+type changes<'a> = {
   /** Elements added to the fixpoint */
-  added: array<string>,
+  added: array<'a>,
   /** Elements removed from the fixpoint */
-  removed: array<string>,
+  removed: array<'a>,
 }
 
 // ============================================================================
@@ -153,19 +161,19 @@ type changes = {
 // ============================================================================
 
 /**
- * Empty delta (no changes to the operator).
+ * Create an empty delta (no changes to the operator).
  * 
  * Useful as a base for constructing deltas with spread syntax:
  * ```rescript
- * { ...Fixpoint.emptyDelta, addedToBase: ["newRoot"] }
+ * { ...Fixpoint.emptyDelta(), addedToBase: ["newRoot"] }
  * ```
  */
-let emptyDelta: delta
+let emptyDelta: unit => delta<'a>
 
 /**
- * Empty changes (nothing added or removed).
+ * Create empty changes (nothing added or removed).
  */
-let emptyChanges: changes
+let emptyChanges: unit => changes<'a>
 
 // ============================================================================
 // Core API
@@ -177,16 +185,16 @@ let emptyChanges: changes
  * Runs BFS expansion to compute the initial fixpoint lfp(F)
  * where F(S) = base ∪ step(S).
  * 
- * @param config - Configuration with the stepFwd function
+ * @param config - Configuration with the stepFwdForEach function
  * @param base - Initial base/seed elements
  * @returns The fixpoint state with current = lfp(F)
  */
-let make: (~config: config<string>, ~base: array<string>) => state<string>
+let make: (~config: config<'a>, ~base: array<'a>) => state<'a>
 
 /**
  * Get the current fixpoint as an array of elements.
  */
-let current: state<'a> => array<string>
+let current: state<'a> => array<'a>
 
 /**
  * Get the rank of an element.
@@ -194,12 +202,12 @@ let current: state<'a> => array<string>
  * Rank = BFS distance from base in the iterative construction.
  * Returns None if the element is not in the fixpoint.
  */
-let rank: (state<'a>, string) => option<int>
+let rank: (state<'a>, 'a) => option<int>
 
 /**
  * Check if an element is in the current fixpoint.
  */
-let has: (state<'a>, string) => bool
+let has: (state<'a>, 'a) => bool
 
 /**
  * Get the current size of the fixpoint.
@@ -209,13 +217,17 @@ let size: state<'a> => int
 /**
  * Apply a delta to the fixpoint and return the changes.
  * 
- * Handles changes to the operator F(S) = base ∪ step(S) in two phases:
+ * Handles changes to the operator F(S) = base ∪ step(S) in three phases:
  * 
  * 1. **Contraction phase** (F shrinks):
  *    - Process `removedFromBase` and `removedFromStep`
  *    - Run well-founded cascade to remove unsupported elements
  * 
- * 2. **Expansion phase** (F grows):
+ * 2. **Re-derivation phase** (handles stale ranks):
+ *    - Check if any removed element can be re-derived from survivors
+ *    - Recovers elements incorrectly removed due to stale ranks
+ * 
+ * 3. **Expansion phase** (F grows):
  *    - Process `addedToBase` and `addedToStep`
  *    - Run BFS to add newly reachable elements
  * 
@@ -223,7 +235,7 @@ let size: state<'a> => int
  * @param delta - The changes to apply
  * @returns The elements that were added and removed
  */
-let applyDelta: (state<string>, delta) => changes
+let applyDelta: (state<'a>, delta<'a>) => changes<'a>
 
 // ============================================================================
 // Debugging
@@ -239,9 +251,9 @@ let applyDelta: (state<string>, delta) => changes
  * - `invIndexSize`: Size of the inverse index
  */
 let debugInfo: state<'a> => {
-  "current": array<string>,
-  "ranks": array<(string, int)>,
-  "base": array<string>,
+  "current": array<'a>,
+  "ranks": array<('a, int)>,
+  "base": array<'a>,
   "invIndexSize": int,
 }
 

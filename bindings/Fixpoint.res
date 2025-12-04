@@ -1,8 +1,11 @@
 /**
- * Incremental Fixpoint Computation
+ * Incremental Fixpoint Computation (Optimized)
  * 
- * This module implements the incremental fixpoint algorithm as described in
- * `incremental_fixpoint_notes.tex` and proven correct in `IncrementalFixpoint.lean`.
+ * This module implements the incremental fixpoint algorithm using JS native
+ * Set and Map for optimal performance:
+ * - O(1) membership tests (hash-based)
+ * - O(1) amortized add/delete
+ * - Zero allocation iteration via forEach callbacks
  * 
  * The fixpoint combinator maintains the least fixpoint of a monotone operator:
  * 
@@ -18,79 +21,58 @@
  * The rank of an element is its BFS distance from base. This is essential for
  * contraction: cycle members have equal ranks, so they cannot provide well-founded
  * support to each other, ensuring unreachable cycles are correctly removed.
- * 
- * See: incremental_fixpoint_notes.tex, Section 3 "Level 1: Low-Level Incremental Fixpoint API"
  */
 
-module Map = Belt.Map
-module Set = Belt.Set
-
 // ============================================================================
-// API Specification (from incremental_fixpoint_notes.tex Section 3.1)
+// Types
 // ============================================================================
 
 /**
- * Configuration for the fixpoint computation (User Provides).
+ * Configuration for the fixpoint computation.
  * 
- * From the notes:
- * - `base : Set(A)` - Seed elements (e.g., roots)
- * - `stepFwd : A → Set(A)` - Forward derivation: given x, returns elements derived by x
- * 
- * The inverse `stepInv` is computed and maintained automatically by the system.
- * 
- * Define: step(S) = ⋃{stepFwd(x) | x ∈ S} and F(S) = base ∪ step(S)
+ * `stepFwdForEach` iterates over successors without allocating an array.
+ * This is more efficient than returning an array when the caller just
+ * needs to iterate.
  */
 type config<'a> = {
-  stepFwd: 'a => array<'a>,
+  stepFwdForEach: ('a, 'a => unit) => unit,
 }
 
 /**
- * State maintained by the fixpoint algorithm (System Maintains).
+ * State maintained by the fixpoint algorithm.
  * 
- * From the notes:
- * - `current : Set(A)` - Current fixpoint set = lfp(F)
- * - `rank : Map(A, ℕ)` - BFS distance from base (for contraction)
- * 
- * Additionally maintained:
- * - `base` - Current base set
- * - `invIndex` - Computed stepInv: invIndex[y] = {x ∈ current | y ∈ stepFwd(x)}
+ * Uses JS native Set and Map for O(1) operations:
+ * - `current`: Current fixpoint set = lfp(F)
+ * - `rank`: BFS distance from base (for contraction)
+ * - `invIndex`: Inverse step relation for contraction
+ * - `base`: Current base set
  */
 type state<'a> = {
-  mutable current: Set.String.t,
-  mutable rank: Map.String.t<int>,
-  mutable invIndex: Map.String.t<Set.String.t>,
-  mutable base: Set.String.t,
-  config: config<string>,
+  current: Set.t<'a>,
+  rank: Map.t<'a, int>,
+  invIndex: Map.t<'a, Set.t<'a>>,
+  base: Set.t<'a>,
+  config: config<'a>,
 }
 
 /**
  * Delta representing changes to the fixpoint operator F.
- * 
- * Since F(S) = base ∪ step(S), changes to F come from:
- * 1. Changes to base (seed elements added/removed)
- * 2. Changes to step (derivation pairs added/removed)
- * 
- * A step pair (x, y) means "x derives y", i.e., y ∈ stepFwd(x).
  */
-type delta = {
-  /** Elements added to the base set */
-  addedToBase: array<string>,
-  /** Elements removed from the base set */
-  removedFromBase: array<string>,
-  /** Derivation pairs added to step: (x, y) means y is now in stepFwd(x) */
-  addedToStep: array<(string, string)>,
-  /** Derivation pairs removed from step: (x, y) means y was removed from stepFwd(x) */
-  removedFromStep: array<(string, string)>,
+type delta<'a> = {
+  addedToBase: array<'a>,
+  removedFromBase: array<'a>,
+  addedToStep: array<('a, 'a)>,
+  removedFromStep: array<('a, 'a)>,
 }
 
 /** Changes produced by applying a delta. */
-type changes = {
-  added: array<string>,
-  removed: array<string>,
+type changes<'a> = {
+  added: array<'a>,
+  removed: array<'a>,
 }
 
 /** Empty delta (no changes). */
-let emptyDelta: delta = {
+let emptyDelta = (): delta<'a> => {
   addedToBase: [],
   removedFromBase: [],
   addedToStep: [],
@@ -98,7 +80,7 @@ let emptyDelta: delta = {
 }
 
 /** Empty changes. */
-let emptyChanges: changes = {
+let emptyChanges = (): changes<'a> => {
   added: [],
   removed: [],
 }
@@ -111,136 +93,131 @@ let emptyChanges: changes = {
  * Add a derivation to the inverse index: invIndex[y] += {x}
  * This records that x derives y (y ∈ stepFwd(x)).
  */
-let addToInvIndex = (state: state<'a>, ~source: string, ~target: string) => {
-  let existing = state.invIndex->Map.String.getWithDefault(target, Set.String.empty)
-  state.invIndex = state.invIndex->Map.String.set(target, existing->Set.String.add(source))
+let addToInvIndex = (state: state<'a>, ~source: 'a, ~target: 'a) => {
+  switch state.invIndex->Map.get(target) {
+  | Some(set) => set->Set.add(source)
+  | None => {
+      let set = Set.make()
+      set->Set.add(source)
+      state.invIndex->Map.set(target, set)
+    }
+  }
 }
 
 /**
  * Remove a derivation from the inverse index: invIndex[y] -= {x}
  */
-let removeFromInvIndex = (state: state<'a>, ~source: string, ~target: string) => {
-  switch state.invIndex->Map.String.get(target) {
+let removeFromInvIndex = (state: state<'a>, ~source: 'a, ~target: 'a) => {
+  switch state.invIndex->Map.get(target) {
   | None => ()
   | Some(set) => {
-      let newSet = set->Set.String.remove(source)
-      if Set.String.isEmpty(newSet) {
-        state.invIndex = state.invIndex->Map.String.remove(target)
-      } else {
-        state.invIndex = state.invIndex->Map.String.set(target, newSet)
+      set->Set.delete(source)->ignore
+      if set->Set.size == 0 {
+        state.invIndex->Map.delete(target)->ignore
       }
     }
   }
 }
 
 /**
- * Get stepInv(x) from the inverse index.
- * Returns {y | x ∈ stepFwd(y)}, i.e., elements that derive x.
+ * Iterate over stepInv(x) from the inverse index.
+ * Returns elements that derive x: {y | x ∈ stepFwd(y)}
  */
-let getStepInv = (state: state<'a>, x: string): Set.String.t => {
-  state.invIndex->Map.String.getWithDefault(x, Set.String.empty)
+let forEachStepInv = (state: state<'a>, x: 'a, f: 'a => unit): unit => {
+  switch state.invIndex->Map.get(x) {
+  | None => ()
+  | Some(set) => set->Set.forEach(f)
+  }
 }
 
 // ============================================================================
 // Expansion Algorithm (BFS)
-// From incremental_fixpoint_notes.tex Section 3.2.1
 // ============================================================================
 
 /**
  * Expand the fixpoint by running BFS from a frontier.
  * 
- * Algorithm from the notes:
- * ```
- * expand(state, config'):
- *   frontier = config'.base \ state.current
- *   r = 0
- *   while frontier ≠ ∅:
- *     for x in frontier:
- *       state.current.add(x)
- *       state.rank[x] = r
- *     nextFrontier = {}
- *     for x in frontier:
- *       for y in config'.stepFwd(x):
- *         if y ∉ state.current:
- *           nextFrontier.add(y)
- *     frontier = nextFrontier
- *     r += 1
- * ```
- * 
+ * Uses mutable JS array for O(n) accumulation instead of O(n²) Array.concat.
  * Returns the set of newly added elements.
  */
-let expand = (state: state<'a>, ~frontier: Set.String.t): array<string> => {
-  let added = ref([])
-  let currentFrontier = ref(frontier)
+let expand = (state: state<'a>, ~frontier: Set.t<'a>): array<'a> => {
+  let added: array<'a> = []
+  let currentFrontier = Set.make()
+  let nextFrontier = Set.make()
+  
+  // Initialize current frontier
+  frontier->Set.forEach(x => currentFrontier->Set.add(x))
+  
   let r = ref(0)
 
-  while !Set.String.isEmpty(currentFrontier.contents) {
+  while currentFrontier->Set.size > 0 {
     // Add all frontier elements to current with rank r
-    currentFrontier.contents->Set.String.forEach(x => {
-      if !(state.current->Set.String.has(x)) {
-        state.current = state.current->Set.String.add(x)
-        state.rank = state.rank->Map.String.set(x, r.contents)
-        added := Array.concat(added.contents, [x])
+    currentFrontier->Set.forEach(x => {
+      if !(state.current->Set.has(x)) {
+        state.current->Set.add(x)
+        state.rank->Map.set(x, r.contents)
+        added->Array.push(x)->ignore
       }
     })
 
     // Compute next frontier: successors not yet in current
-    let nextFrontier = ref(Set.String.empty)
-    currentFrontier.contents->Set.String.forEach(x => {
-      let successors = state.config.stepFwd(x)
-      successors->Array.forEach(y => {
+    nextFrontier->Set.clear
+    currentFrontier->Set.forEach(x => {
+      state.config.stepFwdForEach(x, y => {
         // Update inverse index: record that x derives y
         addToInvIndex(state, ~source=x, ~target=y)
         // Add to next frontier if not already in current
-        if !(state.current->Set.String.has(y)) {
-          nextFrontier := nextFrontier.contents->Set.String.add(y)
+        if !(state.current->Set.has(y)) {
+          nextFrontier->Set.add(y)
         }
       })
     })
 
-    currentFrontier := nextFrontier.contents
+    // Swap frontiers
+    currentFrontier->Set.clear
+    nextFrontier->Set.forEach(x => currentFrontier->Set.add(x))
     r := r.contents + 1
   }
 
-  added.contents
+  added
 }
 
 // ============================================================================
 // Contraction Algorithm (Well-Founded Cascade)
-// From incremental_fixpoint_notes.tex Section 3.2.2
 // ============================================================================
 
 /**
  * Check if element x has a well-founded deriver in the current set.
  * 
- * From the notes (Definition: Well-Founded Derivation):
  * y wf-derives x if:
  * - rank(y) < rank(x)  (strictly lower rank)
  * - x ∈ step({y})      (y derives x)
- * 
- * The rank check is essential for breaking cycles: cycle members have
- * equal ranks, so they cannot provide well-founded support to each other.
  */
 let hasWellFoundedDeriver = (
   state: state<'a>,
-  x: string,
-  ~dying: Set.String.t,
+  x: 'a,
+  ~dying: Set.t<'a>,
 ): bool => {
-  let xRank = state.rank->Map.String.get(x)
-  switch xRank {
-  | None => false // x not in fixpoint, no rank
+  switch state.rank->Map.get(x) {
+  | None => false
   | Some(rx) => {
-      let derivers = getStepInv(state, x)
-      derivers->Set.String.some(y => {
-        // y must be in current, not dying, and have strictly lower rank
-        let inCurrent = state.current->Set.String.has(y)
-        let notDying = !(dying->Set.String.has(y))
-        let yRank = state.rank->Map.String.get(y)
-        switch yRank {
-        | None => false
-        | Some(ry) => inCurrent && notDying && ry < rx
+      let found = ref(false)
+      // Early exit would be nice, but forEach doesn't support it
+      // We could use an exception for early exit, but keep it simple for now
+      forEachStepInv(state, x, y => {
+        if !found.contents {
+          let inCurrent = state.current->Set.has(y)
+          let notDying = !(dying->Set.has(y))
+          switch state.rank->Map.get(y) {
+          | None => ()
+          | Some(ry) =>
+            if inCurrent && notDying && ry < rx {
+              found := true
+            }
+          }
         }
       })
+      found.contents
     }
   }
 }
@@ -248,64 +225,39 @@ let hasWellFoundedDeriver = (
 /**
  * Contract the fixpoint by removing elements that lost support.
  * 
- * Algorithm from the notes:
- * ```
- * contract(state, config'):
- *   worklist = { x | x lost support }
- *   dying = {}
- * 
- *   while worklist ≠ ∅:
- *     x = worklist.pop()
- *     if x ∈ dying or x ∈ config'.base: continue
- * 
- *     // Check for well-founded deriver (strictly lower rank)
- *     hasSupport = false
- *     for y in config'.stepInv(x):
- *       if y ∈ (state.current \ dying) and state.rank[y] < state.rank[x]:
- *         hasSupport = true
- *         break
- * 
- *     if not hasSupport:
- *       dying.add(x)
- *       // Notify dependents
- *       for z where x ∈ config'.stepInv(z):
- *         worklist.add(z)
- * 
- *   state.current -= dying
- * ```
- * 
  * Returns the set of removed elements.
  */
-let contract = (state: state<'a>, ~worklist: Set.String.t): array<string> => {
-  let dying = ref(Set.String.empty)
-  let currentWorklist = ref(worklist)
+let contract = (state: state<'a>, ~worklist: Set.t<'a>): array<'a> => {
+  let dying = Set.make()
+  let currentWorklist = Set.make()
+  
+  // Initialize worklist
+  worklist->Set.forEach(x => currentWorklist->Set.add(x))
 
-  while !Set.String.isEmpty(currentWorklist.contents) {
-    // Pop an element from worklist
-    let x = switch currentWorklist.contents->Set.String.minimum {
-    | None => ""
+  while currentWorklist->Set.size > 0 {
+    // Pop an element from worklist (get first via iterator)
+    let x = switch currentWorklist->Set.values->Iterator.toArray->Array.get(0) {
+    | None => panic("Worklist should not be empty")
     | Some(v) => v
     }
-    currentWorklist := currentWorklist.contents->Set.String.remove(x)
+    currentWorklist->Set.delete(x)->ignore
 
     // Skip if already dying or in base
-    if dying.contents->Set.String.has(x) || state.base->Set.String.has(x) {
-      // Continue to next iteration
+    if dying->Set.has(x) || state.base->Set.has(x) {
       ()
     } else {
       // Check for well-founded deriver
-      let hasSupport = hasWellFoundedDeriver(state, x, ~dying=dying.contents)
+      let hasSupport = hasWellFoundedDeriver(state, x, ~dying)
 
       if !hasSupport {
         // x dies: no well-founded support
-        dying := dying.contents->Set.String.add(x)
+        dying->Set.add(x)
 
         // Find dependents: elements z such that x derives z
         // These might lose their well-founded support
-        let successors = state.config.stepFwd(x)
-        successors->Array.forEach(z => {
-          if state.current->Set.String.has(z) && !(dying.contents->Set.String.has(z)) {
-            currentWorklist := currentWorklist.contents->Set.String.add(z)
+        state.config.stepFwdForEach(x, z => {
+          if state.current->Set.has(z) && !(dying->Set.has(z)) {
+            currentWorklist->Set.add(z)
           }
         })
       }
@@ -313,12 +265,14 @@ let contract = (state: state<'a>, ~worklist: Set.String.t): array<string> => {
   }
 
   // Remove dying elements from current and rank
-  dying.contents->Set.String.forEach(x => {
-    state.current = state.current->Set.String.remove(x)
-    state.rank = state.rank->Map.String.remove(x)
+  let removed: array<'a> = []
+  dying->Set.forEach(x => {
+    state.current->Set.delete(x)->ignore
+    state.rank->Map.delete(x)->ignore
+    removed->Array.push(x)->ignore
   })
 
-  dying.contents->Set.String.toArray
+  removed
 }
 
 // ============================================================================
@@ -331,17 +285,19 @@ let contract = (state: state<'a>, ~worklist: Set.String.t): array<string> => {
  * Runs BFS expansion to compute the initial fixpoint lfp(F)
  * where F(S) = base ∪ step(S).
  */
-let make = (~config: config<string>, ~base: array<string>): state<string> => {
+let make = (~config: config<'a>, ~base: array<'a>): state<'a> => {
+  let baseSet = Set.fromArray(base)
   let state = {
-    current: Set.String.empty,
-    rank: Map.String.empty,
-    invIndex: Map.String.empty,
-    base: Set.String.fromArray(base),
+    current: Set.make(),
+    rank: Map.make(),
+    invIndex: Map.make(),
+    base: baseSet,
     config,
   }
 
   // Initial expansion from base
-  let _ = expand(state, ~frontier=state.base)
+  let initialFrontier = Set.fromArray(base)
+  let _ = expand(state, ~frontier=initialFrontier)
 
   state
 }
@@ -349,50 +305,37 @@ let make = (~config: config<string>, ~base: array<string>): state<string> => {
 /**
  * Get the current fixpoint as an array.
  */
-let current = (state: state<'a>): array<string> => {
-  state.current->Set.String.toArray
+let current = (state: state<'a>): array<'a> => {
+  state.current->Set.values->Iterator.toArray
 }
 
 /**
  * Get the rank of an element (None if not in fixpoint).
- * Rank = BFS distance from base in the iterative construction.
  */
-let rank = (state: state<'a>, x: string): option<int> => {
-  state.rank->Map.String.get(x)
+let rank = (state: state<'a>, x: 'a): option<int> => {
+  state.rank->Map.get(x)
 }
 
 /**
  * Check if an element is in the current fixpoint.
  */
-let has = (state: state<'a>, x: string): bool => {
-  state.current->Set.String.has(x)
+let has = (state: state<'a>, x: 'a): bool => {
+  state.current->Set.has(x)
 }
 
 /**
  * Get the current size of the fixpoint.
  */
 let size = (state: state<'a>): int => {
-  state.current->Set.String.size
+  state.current->Set.size
 }
 
 /**
  * Apply a delta to the fixpoint and return the changes.
- * 
- * Handles changes to the operator F(S) = base ∪ step(S):
- * 
- * 1. **Contraction phase** (F shrinks):
- *    - removedFromBase: elements lose base membership
- *    - removedFromStep: derivation pairs removed
- *    → Run well-founded cascade to remove unsupported elements
- * 
- * 2. **Expansion phase** (F grows):
- *    - addedToBase: new seed elements
- *    - addedToStep: new derivation pairs
- *    → Run BFS to add newly reachable elements
  */
-let applyDelta = (state: state<string>, delta: delta): changes => {
-  let allAdded = ref([])
-  let allRemoved = ref([])
+let applyDelta = (state: state<'a>, delta: delta<'a>): changes<'a> => {
+  let allAdded: array<'a> = []
+  let allRemoved: array<'a> = []
 
   // === CONTRACTION PHASE ===
 
@@ -402,31 +345,33 @@ let applyDelta = (state: state<string>, delta: delta): changes => {
   })
 
   // 2. Handle removed from base
-  let removedBaseSet = Set.String.fromArray(delta.removedFromBase)
-  state.base = state.base->Set.String.diff(removedBaseSet)
+  delta.removedFromBase->Array.forEach(x => {
+    state.base->Set.delete(x)->ignore
+  })
 
   // 3. Compute worklist for contraction
-  // Elements that might have lost support:
-  // - Elements removed from base (if they were in current)
-  // - Targets of removed step pairs (if source was in current)
-  let contractionWorklist = ref(Set.String.empty)
+  let contractionWorklist = Set.make()
 
   delta.removedFromBase->Array.forEach(x => {
-    if state.current->Set.String.has(x) {
-      contractionWorklist := contractionWorklist.contents->Set.String.add(x)
+    if state.current->Set.has(x) {
+      contractionWorklist->Set.add(x)
     }
   })
 
   delta.removedFromStep->Array.forEach(((source, target)) => {
-    if state.current->Set.String.has(source) && state.current->Set.String.has(target) {
-      contractionWorklist := contractionWorklist.contents->Set.String.add(target)
+    if state.current->Set.has(source) && state.current->Set.has(target) {
+      contractionWorklist->Set.add(target)
     }
   })
 
   // Run contraction if needed
-  if !Set.String.isEmpty(contractionWorklist.contents) {
-    let removed = contract(state, ~worklist=contractionWorklist.contents)
-    allRemoved := Array.concat(allRemoved.contents, removed)
+  let removedSet = Set.make()
+  if contractionWorklist->Set.size > 0 {
+    let removed = contract(state, ~worklist=contractionWorklist)
+    removed->Array.forEach(x => {
+      allRemoved->Array.push(x)->ignore
+      removedSet->Set.add(x)
+    })
   }
 
   // === EXPANSION PHASE ===
@@ -437,35 +382,65 @@ let applyDelta = (state: state<string>, delta: delta): changes => {
   })
 
   // 5. Handle added to base
-  let addedBaseSet = Set.String.fromArray(delta.addedToBase)
-  state.base = state.base->Set.String.union(addedBaseSet)
+  delta.addedToBase->Array.forEach(x => {
+    state.base->Set.add(x)
+  })
 
   // 6. Compute frontier for expansion
-  // - New base elements not yet in current
-  // - Targets of added step pairs where source is in current
-  let expansionFrontier = ref(Set.String.empty)
+  let expansionFrontier = Set.make()
 
   delta.addedToBase->Array.forEach(x => {
-    if !(state.current->Set.String.has(x)) {
-      expansionFrontier := expansionFrontier.contents->Set.String.add(x)
+    if !(state.current->Set.has(x)) {
+      expansionFrontier->Set.add(x)
     }
   })
 
   delta.addedToStep->Array.forEach(((source, target)) => {
-    if state.current->Set.String.has(source) && !(state.current->Set.String.has(target)) {
-      expansionFrontier := expansionFrontier.contents->Set.String.add(target)
+    if state.current->Set.has(source) && !(state.current->Set.has(target)) {
+      expansionFrontier->Set.add(target)
     }
   })
 
-  // Run expansion if needed
-  if !Set.String.isEmpty(expansionFrontier.contents) {
-    let added = expand(state, ~frontier=expansionFrontier.contents)
-    allAdded := Array.concat(allAdded.contents, added)
+  // 7. IMPORTANT: Check if any removed element can be re-derived via existing edges
+  // OPTIMIZATION: Use invIndex to only check edges TO removed elements (not all edges)
+  // This gives O(|removed| + |edges to removed|) instead of O(|surviving| + |edges from surviving|)
+  if removedSet->Set.size > 0 {
+    removedSet->Set.forEach(y => {
+      // Check if any surviving element derives y (using invIndex)
+      forEachStepInv(state, y, x => {
+        if state.current->Set.has(x) {
+          // x is surviving and derives y, so y might be re-derivable
+          expansionFrontier->Set.add(y)
+        }
+      })
+    })
   }
 
+  // Run expansion if needed
+  if expansionFrontier->Set.size > 0 {
+    let added = expand(state, ~frontier=expansionFrontier)
+    added->Array.forEach(x => allAdded->Array.push(x)->ignore)
+  }
+
+  // 8. Compute net changes (elements that were removed and not re-added)
+  let netRemoved: array<'a> = []
+  allRemoved->Array.forEach(x => {
+    if !(state.current->Set.has(x)) {
+      netRemoved->Array.push(x)->ignore
+    }
+  })
+
+  // Elements that were added and weren't previously there
+  let netAdded: array<'a> = []
+  allAdded->Array.forEach(x => {
+    if !(removedSet->Set.has(x)) {
+      netAdded->Array.push(x)->ignore
+    }
+  })
+
   {
-    added: allAdded.contents,
-    removed: allRemoved.contents,
+    added: netAdded,
+    removed: netRemoved,
   }
 }
 
@@ -473,15 +448,16 @@ let applyDelta = (state: state<string>, delta: delta): changes => {
  * Get debug information about the current state.
  */
 let debugInfo = (state: state<'a>): {
-  "current": array<string>,
-  "ranks": array<(string, int)>,
-  "base": array<string>,
+  "current": array<'a>,
+  "ranks": array<('a, int)>,
+  "base": array<'a>,
   "invIndexSize": int,
 } => {
   {
-    "current": state.current->Set.String.toArray,
-    "ranks": state.rank->Map.String.toArray,
-    "base": state.base->Set.String.toArray,
-    "invIndexSize": state.invIndex->Map.String.size,
+    "current": state.current->Set.values->Iterator.toArray,
+    "ranks": state.rank->Map.entries->Iterator.toArray,
+    "base": state.base->Set.values->Iterator.toArray,
+    "invIndexSize": state.invIndex->Map.size,
   }
 }
+

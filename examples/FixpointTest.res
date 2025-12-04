@@ -1,407 +1,407 @@
 /**
- * Fixpoint Algorithm Test
- * 
- * This file tests the incremental fixpoint algorithms using the examples
- * from incremental_fixpoint_notes.tex (Section 4: Worked Example: DCE in Detail).
+ * Tests for Fixpoint (optimized implementation with JS native collections)
  * 
  * Run with: node examples/FixpointTest.res.js
  */
 
 // ============================================================================
-// Test utilities
+// Test Helpers
 // ============================================================================
 
-module Map = Belt.Map
+let testCount = ref(0)
+let passCount = ref(0)
+let failCount = ref(0)
 
-let log = msg => Console.log(msg)
-let logArray = (label, arr) => Console.log(label ++ ": [" ++ arr->Array.join(", ") ++ "]")
+let sortedArray = arr => arr->Array.toSorted(String.compare)
 
-// Test tracking
-let passed = ref(0)
-let failed = ref(0)
-let failures: ref<array<string>> = ref([])
+let assertEqual = (name: string, actual: array<string>, expected: array<string>) => {
+  testCount := testCount.contents + 1
+  let actualSorted = sortedArray(actual)
+  let expectedSorted = sortedArray(expected)
+  let pass = actualSorted == expectedSorted
+  if pass {
+    passCount := passCount.contents + 1
+    Console.log("✓ " ++ name)
+  } else {
+    failCount := failCount.contents + 1
+    Console.log("✗ " ++ name)
+    Console.log2("  Expected:", expectedSorted)
+    Console.log2("  Actual:  ", actualSorted)
+  }
+}
 
-let assertEqual = (actual: 'a, expected: 'a, msg: string) => {
+let assertSize = (name: string, actual: int, expected: int) => {
+  testCount := testCount.contents + 1
   if actual == expected {
-    Console.log("✓ " ++ msg)
-    passed := passed.contents + 1
+    passCount := passCount.contents + 1
+    Console.log("✓ " ++ name)
   } else {
-    Console.log("✗ " ++ msg)
-    Console.log("  Expected: " ++ JSON.stringifyAny(expected)->Option.getOr("?"))
-    Console.log("  Actual: " ++ JSON.stringifyAny(actual)->Option.getOr("?"))
-    failed := failed.contents + 1
-    failures := Array.concat(failures.contents, [msg])
+    failCount := failCount.contents + 1
+    Console.log("✗ " ++ name)
+    Console.log2("  Expected:", expected)
+    Console.log2("  Actual:  ", actual)
   }
 }
 
-let assertArrayEqual = (actual: array<string>, expected: array<string>, msg: string) => {
-  let sortedActual = actual->Array.toSorted(String.compare)
-  let sortedExpected = expected->Array.toSorted(String.compare)
-  assertEqual(sortedActual, sortedExpected, msg)
-}
-
-let printSummary = () => {
-  let total = passed.contents + failed.contents
-  log("\n" ++ String.repeat("=", 60))
-  log("TEST SUMMARY")
-  log(String.repeat("=", 60))
-  log(`Total:  ${Int.toString(total)} tests`)
-  log(`Passed: ${Int.toString(passed.contents)} ✓`)
-  log(`Failed: ${Int.toString(failed.contents)} ✗`)
-  
-  if failed.contents > 0 {
-    log("\nFailed tests:")
-    failures.contents->Array.forEach(f => log("  - " ++ f))
-  }
-  
-  log(String.repeat("=", 60))
-  if failed.contents == 0 {
-    log("All tests passed! 🎉")
+let assertTrue = (name: string, actual: bool) => {
+  testCount := testCount.contents + 1
+  if actual {
+    passCount := passCount.contents + 1
+    Console.log("✓ " ++ name)
   } else {
-    log(`${Int.toString(failed.contents)} test(s) failed.`)
+    failCount := failCount.contents + 1
+    Console.log("✗ " ++ name)
+    Console.log("  Expected: true, Actual: false")
+  }
+}
+
+let assertFalse = (name: string, actual: bool) => {
+  testCount := testCount.contents + 1
+  if !actual {
+    passCount := passCount.contents + 1
+    Console.log("✓ " ++ name)
+  } else {
+    failCount := failCount.contents + 1
+    Console.log("✗ " ++ name)
+    Console.log("  Expected: false, Actual: true")
   }
 }
 
 // ============================================================================
-// Test: Initial Graph (from Section 4.1)
+// Helper to create config from edge map
 // ============================================================================
 
-/**
- * Initial graph:
- * 
- *   R → A → B → C
- *       ↓   ↑
- *       D ──┘
- * 
- * base = {R}
- * stepFwd(R) = {A}
- * stepFwd(A) = {B, D}
- * stepFwd(B) = {C}
- * stepFwd(D) = {B}
- * 
- * Expected fixpoint: {R, A, B, C, D}
- * Expected ranks: R:0, A:1, B:2, C:3, D:2
- */
-let testInitialGraph = () => {
-  log("\n=== Test: Initial Graph ===")
+let makeConfig = (edges: Map.t<string, Set.t<string>>): Fixpoint.config<string> => {
+  stepFwdForEach: (source, f) => {
+    switch edges->Map.get(source) {
+    | None => ()
+    | Some(targets) => targets->Set.forEach(f)
+    }
+  },
+}
 
-  let edges = Map.String.fromArray([
-    ("R", ["A"]),
-    ("A", ["B", "D"]),
-    ("B", ["C"]),
-    ("D", ["B"]),
-  ])
-
-  let config: Fixpoint.config<string> = {
-    stepFwd: x => edges->Map.String.getWithDefault(x, []),
-  }
-
-  let state = Fixpoint.make(~config, ~base=["R"])
-
-  // Check fixpoint
-  assertArrayEqual(Fixpoint.current(state), ["R", "A", "B", "C", "D"], "Initial fixpoint contains R, A, B, C, D")
-
-  // Check ranks
-  assertEqual(Fixpoint.rank(state, "R"), Some(0), "R has rank 0")
-  assertEqual(Fixpoint.rank(state, "A"), Some(1), "A has rank 1")
-  assertEqual(Fixpoint.rank(state, "B"), Some(2), "B has rank 2")
-  assertEqual(Fixpoint.rank(state, "C"), Some(3), "C has rank 3")
-  assertEqual(Fixpoint.rank(state, "D"), Some(2), "D has rank 2")
-
-  state
+let makeEdges = (edgeList: array<(string, array<string>)>): Map.t<string, Set.t<string>> => {
+  let edges = Map.make()
+  edgeList->Array.forEach(((from, targets)) => {
+    edges->Map.set(from, Set.fromArray(targets))
+  })
+  edges
 }
 
 // ============================================================================
-// Test: Expansion - Adding Edge R → E (from Section 4.2)
+// Test: Basic Expansion
 // ============================================================================
 
-/**
- * Add edge R → E where E → F
- * 
- *   R → A → B → C
- *   ↓   ↓   ↑
- *   E   D ──┘
- *   ↓
- *   F
- * 
- * Expected: E and F are added with ranks 1 and 2
- */
-let testExpansion = () => {
-  log("\n=== Test: Expansion (Add Edge) ===")
-
-  // Start with extended edges including E → F
-  let edges = Map.String.fromArray([
-    ("R", ["A", "E"]),
-    ("A", ["B", "D"]),
-    ("B", ["C"]),
-    ("D", ["B"]),
-    ("E", ["F"]),
-  ])
-
-  let config: Fixpoint.config<string> = {
-    stepFwd: x => edges->Map.String.getWithDefault(x, []),
-  }
-
-  // Start with original graph (without R → E)
-  let originalEdges = Map.String.fromArray([
-    ("R", ["A"]),
-    ("A", ["B", "D"]),
-    ("B", ["C"]),
-    ("D", ["B"]),
-  ])
-
-  let originalConfig: Fixpoint.config<string> = {
-    stepFwd: x => originalEdges->Map.String.getWithDefault(x, []),
-  }
-
-  let state = Fixpoint.make(~config=originalConfig, ~base=["R"])
-  assertArrayEqual(Fixpoint.current(state), ["R", "A", "B", "C", "D"], "Before expansion: R, A, B, C, D")
-
-  // Now simulate adding edge R → E by applying delta
-  // We need to update the config's stepFwd - but since it's a function,
-  // we'll recreate with the new edges
-  let newState = Fixpoint.make(~config, ~base=["R"])
-
-  assertArrayEqual(
-    Fixpoint.current(newState),
-    ["R", "A", "B", "C", "D", "E", "F"],
-    "After expansion: R, A, B, C, D, E, F",
-  )
-  assertEqual(Fixpoint.rank(newState, "E"), Some(1), "E has rank 1")
-  assertEqual(Fixpoint.rank(newState, "F"), Some(2), "F has rank 2")
+let testBasicExpansion = () => {
+  Console.log("")
+  Console.log("=== Test: Basic Expansion ===")
+  
+  // Graph: a -> b -> c
+  let edges = makeEdges([("a", ["b"]), ("b", ["c"])])
+  let config = makeConfig(edges)
+  
+  let state = Fixpoint.make(~config, ~base=["a"])
+  
+  assertEqual("Initial fixpoint contains a, b, c", Fixpoint.current(state), ["a", "b", "c"])
+  assertSize("Size is 3", Fixpoint.size(state), 3)
+  assertTrue("Has a", Fixpoint.has(state, "a"))
+  assertTrue("Has b", Fixpoint.has(state, "b"))
+  assertTrue("Has c", Fixpoint.has(state, "c"))
+  assertFalse("Does not have d", Fixpoint.has(state, "d"))
 }
 
 // ============================================================================
-// Test: Contraction - Removing Edge A → D (from Section 4.3)
+// Test: Multiple Roots
 // ============================================================================
 
-/**
- * Remove edge A → D
- * 
- *   R → A → B → C
- *           ↑
- *       D ──┘  (D unreachable now)
- * 
- * Expected: D is removed (no well-founded deriver)
- */
-let testContraction = () => {
-  log("\n=== Test: Contraction (Remove Edge) ===")
-
-  // Full edges
-  let fullEdges = Map.String.fromArray([
-    ("R", ["A"]),
-    ("A", ["B", "D"]),
-    ("B", ["C"]),
-    ("D", ["B"]),
-  ])
-
-  let fullConfig: Fixpoint.config<string> = {
-    stepFwd: x => fullEdges->Map.String.getWithDefault(x, []),
-  }
-
-  let state = Fixpoint.make(~config=fullConfig, ~base=["R"])
-  assertArrayEqual(Fixpoint.current(state), ["R", "A", "B", "C", "D"], "Before contraction: R, A, B, C, D")
-
-  // Apply delta: remove derivation A → D
-  let changes = Fixpoint.applyDelta(
-    state,
-    {
-      ...Fixpoint.emptyDelta,
-      removedFromStep: [("A", "D")],
-    },
-  )
-
-  logArray("Removed elements", changes.removed)
-  assertArrayEqual(changes.removed, ["D"], "D was removed")
-  assertArrayEqual(Fixpoint.current(state), ["R", "A", "B", "C"], "After contraction: R, A, B, C")
+let testMultipleRoots = () => {
+  Console.log("")
+  Console.log("=== Test: Multiple Roots ===")
+  
+  // Graph: a -> b, c -> d (disconnected components)
+  let edges = makeEdges([("a", ["b"]), ("c", ["d"])])
+  let config = makeConfig(edges)
+  
+  let state = Fixpoint.make(~config, ~base=["a", "c"])
+  
+  assertEqual("Contains both components", Fixpoint.current(state), ["a", "b", "c", "d"])
 }
 
 // ============================================================================
-// Test: Contraction with Cycles (from Section 4.4)
-// ============================================================================
-
-/**
- * Graph with cycle:
- * 
- *   R → A ↔ B
- * 
- * ranks: R:0, A:1, B:2
- * 
- * Remove edge R → A:
- * - A loses its wf-deriver (R)
- * - B has A as deriver, but rank[A] = 1 > rank[A] is false... wait
- * - Actually: B is derived by A. A's rank is 1, B's rank is 2.
- * - When A dies, B loses its only wf-deriver
- * - B cannot use A as deriver (A is dying)
- * - B → A edge doesn't help because rank[B] = 2 > rank[A] = 1
- * 
- * Expected: A and B both removed, only R remains
- */
-let testCycleContraction = () => {
-  log("\n=== Test: Cycle Contraction ===")
-
-  // Graph with cycle
-  let edges = Map.String.fromArray([("R", ["A"]), ("A", ["B"]), ("B", ["A"])])
-
-  let config: Fixpoint.config<string> = {
-    stepFwd: x => edges->Map.String.getWithDefault(x, []),
-  }
-
-  let state = Fixpoint.make(~config, ~base=["R"])
-  assertArrayEqual(Fixpoint.current(state), ["R", "A", "B"], "Before: R, A, B in fixpoint")
-  assertEqual(Fixpoint.rank(state, "R"), Some(0), "R has rank 0")
-  assertEqual(Fixpoint.rank(state, "A"), Some(1), "A has rank 1")
-  assertEqual(Fixpoint.rank(state, "B"), Some(2), "B has rank 2")
-
-  // Remove derivation R → A
-  let changes = Fixpoint.applyDelta(
-    state,
-    {
-      ...Fixpoint.emptyDelta,
-      removedFromStep: [("R", "A")],
-    },
-  )
-
-  logArray("Removed elements", changes.removed)
-  // Both A and B should be removed
-  assertArrayEqual(changes.removed->Array.toSorted(String.compare), ["A", "B"], "A and B were removed (cycle broken)")
-  assertArrayEqual(Fixpoint.current(state), ["R"], "After: only R remains")
-}
-
-// ============================================================================
-// Test: Remove from Base
-// ============================================================================
-
-let testRemoveFromBase = () => {
-  log("\n=== Test: Remove from Base ===")
-
-  let edges = Map.String.fromArray([("R", ["A"]), ("A", ["B"])])
-
-  let config: Fixpoint.config<string> = {
-    stepFwd: x => edges->Map.String.getWithDefault(x, []),
-  }
-
-  let state = Fixpoint.make(~config, ~base=["R"])
-  assertArrayEqual(Fixpoint.current(state), ["R", "A", "B"], "Before: R, A, B in fixpoint")
-
-  // Remove R from base
-  let changes = Fixpoint.applyDelta(
-    state,
-    {
-      ...Fixpoint.emptyDelta,
-      removedFromBase: ["R"],
-    },
-  )
-
-  logArray("Removed elements", changes.removed)
-  assertArrayEqual(
-    changes.removed->Array.toSorted(String.compare),
-    ["A", "B", "R"],
-    "All elements removed when root is removed",
-  )
-  assertArrayEqual(Fixpoint.current(state), [], "After: empty fixpoint")
-}
-
-// ============================================================================
-// Test: Add to Base
-// ============================================================================
-
-let testAddToBase = () => {
-  log("\n=== Test: Add to Base ===")
-
-  let edges = Map.String.fromArray([("R", ["A"]), ("A", ["B"]), ("S", ["C"]), ("C", ["D"])])
-
-  let config: Fixpoint.config<string> = {
-    stepFwd: x => edges->Map.String.getWithDefault(x, []),
-  }
-
-  // Start with only R as base
-  let state = Fixpoint.make(~config, ~base=["R"])
-  assertArrayEqual(Fixpoint.current(state), ["R", "A", "B"], "Before: R, A, B in fixpoint")
-
-  // Add S to base
-  let changes = Fixpoint.applyDelta(
-    state,
-    {
-      ...Fixpoint.emptyDelta,
-      addedToBase: ["S"],
-    },
-  )
-
-  logArray("Added elements", changes.added)
-  assertArrayEqual(
-    changes.added->Array.toSorted(String.compare),
-    ["C", "D", "S"],
-    "S, C, D added",
-  )
-  assertArrayEqual(
-    Fixpoint.current(state)->Array.toSorted(String.compare),
-    ["A", "B", "C", "D", "R", "S"],
-    "After: R, A, B, S, C, D in fixpoint",
-  )
-}
-
-// ============================================================================
-// Test: Multiple Paths (Diamond)
+// Test: Diamond Graph
 // ============================================================================
 
 let testDiamond = () => {
-  log("\n=== Test: Diamond (Multiple Paths) ===")
-
-  // Diamond: R → A → C, R → B → C
-  let edges = Map.String.fromArray([("R", ["A", "B"]), ("A", ["C"]), ("B", ["C"])])
-
-  let config: Fixpoint.config<string> = {
-    stepFwd: x => edges->Map.String.getWithDefault(x, []),
+  Console.log("")
+  Console.log("=== Test: Diamond Graph ===")
+  
+  // Graph: a -> b, a -> c, b -> d, c -> d
+  let edges = makeEdges([("a", ["b", "c"]), ("b", ["d"]), ("c", ["d"])])
+  let config = makeConfig(edges)
+  
+  let state = Fixpoint.make(~config, ~base=["a"])
+  
+  assertEqual("Contains all nodes", Fixpoint.current(state), ["a", "b", "c", "d"])
+  
+  // Check ranks
+  switch Fixpoint.rank(state, "a") {
+  | Some(r) => assertSize("Rank of a is 0", r, 0)
+  | None => assertTrue("Rank of a should exist", false)
   }
+  switch Fixpoint.rank(state, "d") {
+  | Some(r) => assertSize("Rank of d is 2", r, 2)
+  | None => assertTrue("Rank of d should exist", false)
+  }
+}
 
-  let state = Fixpoint.make(~config, ~base=["R"])
-  assertArrayEqual(Fixpoint.current(state), ["R", "A", "B", "C"], "Initial: R, A, B, C")
-  assertEqual(Fixpoint.rank(state, "C"), Some(2), "C has rank 2 (shortest path)")
+// ============================================================================
+// Test: Cycle
+// ============================================================================
 
-  // Remove derivation A → C (C still reachable via B)
-  let changes = Fixpoint.applyDelta(
-    state,
-    {
-      ...Fixpoint.emptyDelta,
-      removedFromStep: [("A", "C")],
-    },
-  )
+let testCycle = () => {
+  Console.log("")
+  Console.log("=== Test: Cycle ===")
+  
+  // Graph: a -> b -> c -> b (cycle from root)
+  let edges = makeEdges([("a", ["b"]), ("b", ["c"]), ("c", ["b"])])
+  let config = makeConfig(edges)
+  
+  let state = Fixpoint.make(~config, ~base=["a"])
+  
+  assertEqual("Contains a, b, c", Fixpoint.current(state), ["a", "b", "c"])
+}
 
-  assertArrayEqual(changes.removed, [], "No elements removed (C still reachable via B)")
-  assertArrayEqual(Fixpoint.current(state), ["R", "A", "B", "C"], "After: still R, A, B, C")
+// ============================================================================
+// Test: Add Base Element
+// ============================================================================
 
-  // Now remove derivation B → C (C becomes unreachable)
-  let changes2 = Fixpoint.applyDelta(
-    state,
-    {
-      ...Fixpoint.emptyDelta,
-      removedFromStep: [("B", "C")],
-    },
-  )
+let testAddBase = () => {
+  Console.log("")
+  Console.log("=== Test: Add Base Element ===")
+  
+  // Graph: a -> b, c -> d
+  let edges = makeEdges([("a", ["b"]), ("c", ["d"])])
+  let config = makeConfig(edges)
+  
+  let state = Fixpoint.make(~config, ~base=["a"])
+  assertEqual("Initial: a, b", Fixpoint.current(state), ["a", "b"])
+  
+  let changes = Fixpoint.applyDelta(state, {
+    ...Fixpoint.emptyDelta(),
+    addedToBase: ["c"],
+  })
+  
+  assertEqual("Added c, d", changes.added, ["c", "d"])
+  assertEqual("Nothing removed", changes.removed, [])
+  assertEqual("Final: a, b, c, d", Fixpoint.current(state), ["a", "b", "c", "d"])
+}
 
-  assertArrayEqual(changes2.removed, ["C"], "C removed (no more paths)")
-  assertArrayEqual(Fixpoint.current(state), ["R", "A", "B"], "After: R, A, B")
+// ============================================================================
+// Test: Remove Base Element
+// ============================================================================
+
+let testRemoveBase = () => {
+  Console.log("")
+  Console.log("=== Test: Remove Base Element ===")
+  
+  // Graph: a -> b -> c
+  let edges = makeEdges([("a", ["b"]), ("b", ["c"])])
+  let config = makeConfig(edges)
+  
+  let state = Fixpoint.make(~config, ~base=["a"])
+  assertEqual("Initial: a, b, c", Fixpoint.current(state), ["a", "b", "c"])
+  
+  let changes = Fixpoint.applyDelta(state, {
+    ...Fixpoint.emptyDelta(),
+    removedFromBase: ["a"],
+  })
+  
+  assertEqual("Nothing added", changes.added, [])
+  assertEqual("Removed a, b, c", changes.removed, ["a", "b", "c"])
+  assertEqual("Final: empty", Fixpoint.current(state), [])
+}
+
+// ============================================================================
+// Test: Add Step (Edge)
+// ============================================================================
+
+let testAddStep = () => {
+  Console.log("")
+  Console.log("=== Test: Add Step (Edge) ===")
+  
+  // Start with just a, then add edge a -> b
+  let edges: Map.t<string, Set.t<string>> = Map.make()
+  let config = makeConfig(edges)
+  
+  let state = Fixpoint.make(~config, ~base=["a"])
+  assertEqual("Initial: just a", Fixpoint.current(state), ["a"])
+  
+  // Add the edge a -> b to the edges map
+  edges->Map.set("a", Set.fromArray(["b"]))
+  
+  let changes = Fixpoint.applyDelta(state, {
+    ...Fixpoint.emptyDelta(),
+    addedToStep: [("a", "b")],
+  })
+  
+  assertEqual("Added b", changes.added, ["b"])
+  assertEqual("Final: a, b", Fixpoint.current(state), ["a", "b"])
+}
+
+// ============================================================================
+// Test: Remove Step (Edge)
+// ============================================================================
+
+let testRemoveStep = () => {
+  Console.log("")
+  Console.log("=== Test: Remove Step (Edge) ===")
+  
+  // Graph: a -> b -> c, remove a -> b
+  let edges = makeEdges([("a", ["b"]), ("b", ["c"])])
+  let config = makeConfig(edges)
+  
+  let state = Fixpoint.make(~config, ~base=["a"])
+  assertEqual("Initial: a, b, c", Fixpoint.current(state), ["a", "b", "c"])
+  
+  // Remove edge a -> b from edges map
+  edges->Map.delete("a")->ignore
+  
+  let changes = Fixpoint.applyDelta(state, {
+    ...Fixpoint.emptyDelta(),
+    removedFromStep: [("a", "b")],
+  })
+  
+  assertEqual("Nothing added", changes.added, [])
+  assertEqual("Removed b, c", changes.removed, ["b", "c"])
+  assertEqual("Final: just a", Fixpoint.current(state), ["a"])
+}
+
+// ============================================================================
+// Test: Cycle Removal (Well-Founded Derivation)
+// ============================================================================
+
+let testCycleRemoval = () => {
+  Console.log("")
+  Console.log("=== Test: Cycle Removal (Well-Founded) ===")
+  
+  // Graph: a -> b -> c -> b (b-c cycle reachable from a)
+  // If we remove a -> b, the cycle should die because neither b nor c
+  // has a well-founded deriver (they have equal ranks, can't support each other)
+  let edges = makeEdges([("a", ["b"]), ("b", ["c"]), ("c", ["b"])])
+  let config = makeConfig(edges)
+  
+  let state = Fixpoint.make(~config, ~base=["a"])
+  assertEqual("Initial: a, b, c", Fixpoint.current(state), ["a", "b", "c"])
+  
+  // Remove edge a -> b
+  edges->Map.set("a", Set.make())
+  
+  let changes = Fixpoint.applyDelta(state, {
+    ...Fixpoint.emptyDelta(),
+    removedFromStep: [("a", "b")],
+  })
+  
+  assertEqual("Removed b, c (cycle dies)", changes.removed, ["b", "c"])
+  assertEqual("Final: just a", Fixpoint.current(state), ["a"])
+}
+
+// ============================================================================
+// Test: Alternative Support Keeps Element Alive
+// ============================================================================
+
+let testAlternativeSupport = () => {
+  Console.log("")
+  Console.log("=== Test: Alternative Support ===")
+  
+  // Graph: a -> b, a -> c -> b
+  // If we remove a -> b, b should survive via a -> c -> b
+  let edges = makeEdges([("a", ["b", "c"]), ("c", ["b"])])
+  let config = makeConfig(edges)
+  
+  let state = Fixpoint.make(~config, ~base=["a"])
+  assertEqual("Initial: a, b, c", Fixpoint.current(state), ["a", "b", "c"])
+  
+  // Remove direct edge a -> b
+  edges->Map.set("a", Set.fromArray(["c"]))
+  
+  let changes = Fixpoint.applyDelta(state, {
+    ...Fixpoint.emptyDelta(),
+    removedFromStep: [("a", "b")],
+  })
+  
+  assertEqual("Nothing removed (b still reachable via c)", changes.removed, [])
+  assertEqual("Final: a, b, c", Fixpoint.current(state), ["a", "b", "c"])
+}
+
+// ============================================================================
+// Test: Empty Base
+// ============================================================================
+
+let testEmptyBase = () => {
+  Console.log("")
+  Console.log("=== Test: Empty Base ===")
+  
+  let edges = makeEdges([("a", ["b"])])
+  let config = makeConfig(edges)
+  
+  let state = Fixpoint.make(~config, ~base=[])
+  
+  assertEqual("Empty base gives empty fixpoint", Fixpoint.current(state), [])
+  assertSize("Size is 0", Fixpoint.size(state), 0)
+}
+
+// ============================================================================
+// Test: Self Loop
+// ============================================================================
+
+let testSelfLoop = () => {
+  Console.log("")
+  Console.log("=== Test: Self Loop ===")
+  
+  // Graph: a -> a (self loop)
+  let edges = makeEdges([("a", ["a"])])
+  let config = makeConfig(edges)
+  
+  let state = Fixpoint.make(~config, ~base=["a"])
+  
+  assertEqual("Self loop: just a", Fixpoint.current(state), ["a"])
 }
 
 // ============================================================================
 // Run all tests
 // ============================================================================
 
-let main = () => {
-  log("Fixpoint Algorithm Tests")
-  log("========================")
-
-  let _ = testInitialGraph()
-  testExpansion()
-  testContraction()
-  testCycleContraction()
-  testRemoveFromBase()
-  testAddToBase()
+let runTests = () => {
+  Console.log("Fixpoint Tests")
+  Console.log("===============")
+  
+  testBasicExpansion()
+  testMultipleRoots()
   testDiamond()
-
-  printSummary()
+  testCycle()
+  testAddBase()
+  testRemoveBase()
+  testAddStep()
+  testRemoveStep()
+  testCycleRemoval()
+  testAlternativeSupport()
+  testEmptyBase()
+  testSelfLoop()
+  
+  Console.log("")
+  Console.log("===============")
+  Console.log2("Total:", testCount.contents)
+  Console.log2("Passed:", passCount.contents)
+  Console.log2("Failed:", failCount.contents)
+  
+  if failCount.contents > 0 {
+    Console.log("")
+    Console.log("SOME TESTS FAILED!")
+  } else {
+    Console.log("")
+    Console.log("ALL TESTS PASSED!")
+  }
 }
 
-main()
+runTests()
 
