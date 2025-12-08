@@ -32,6 +32,8 @@
 
 import Mathlib.Data.Set.Lattice
 
+set_option linter.style.longLine false
+
 namespace IncrementalFixpoint
 
 variable {α : Type*}
@@ -136,7 +138,7 @@ def stepElementWise (op : DecomposedOp α) : Prop :=
 
 /-- With element-wise step, iterF elements have well-founded derivers. -/
 lemma iterF_has_wf_deriver (op : DecomposedOp α) (h_ew : stepElementWise op)
-    (x : α) (n : ℕ) (hin : x ∈ iterF op (n + 1)) (hnotin : x ∉ iterF op n)
+    (x : α) (n : ℕ) (hin : x ∈ iterF op (n + 1)) (_hnotin : x ∉ iterF op n)
     (hnotbase : x ∉ op.base) :
     ∃ y ∈ iterF op n, x ∈ op.step {y} := by
   simp only [iterF, DecomposedOp.F, DecomposedOp.toMonotoneOp, Set.mem_union] at hin
@@ -217,7 +219,7 @@ lemma iterFLimit_has_wf_deriver (op : DecomposedOp α) (h_ew : stepElementWise o
   cases m with
   | zero =>
     simp only [firstAppears, iterF] at hm_first
-    exact absurd hm_first.1 (Set.not_mem_empty x)
+    exact absurd hm_first.1 (Set.notMem_empty x)
   | succ m =>
     -- x first appears at m+1, so ∃y ∈ iterF(m). x ∈ step({y})
     obtain ⟨y, hy_in, hy_derives⟩ := first_appearance_has_deriver op h_ew x m hm_first hnotbase
@@ -234,15 +236,14 @@ lemma iterFLimit_has_wf_deriver (op : DecomposedOp α) (h_ew : stepElementWise o
 
 /-- Elements of lfp' survive well-founded cascade from lfp.
     Key: lfp' elements have well-founded derivers within lfp'. -/
-lemma lfp'_subset_wfCascadeN (op op' : DecomposedOp α) (lfp lfp' : Set α) (n : ℕ)
+lemma lfp'_subset_wfCascadeN (op' : DecomposedOp α) (lfp lfp' : Set α) (n : ℕ)
     (h_ew : stepElementWise op')
-    (h_lfp' : isLeastFixpoint op'.toMonotoneOp lfp')
     (h_sub : lfp' ⊆ lfp)
     -- Key: lfp' = iterFLimit(op'), so lfp' elements have wf-derivers in lfp'
     (h_lfp'_eq_limit : lfp' = iterFLimit op') :
     lfp' ⊆ wfCascadeN op' lfp n := by
   induction n with
-  | zero => simp [wfCascadeN]; exact h_sub
+  | zero => simp only [wfCascadeN]; exact h_sub
   | succ n ih =>
     intro x hx
     simp only [wfCascadeN, wfCascadeStep, wfShouldDie, Set.mem_diff, Set.mem_sep_iff]
@@ -311,7 +312,7 @@ lemma wfCascade_removes_non_lfp' (op' : DecomposedOp α) (lfp lfp' : Set α) (x 
 theorem wf_contraction_correctness (op' : DecomposedOp α) (lfp lfp' : Set α)
     (h_ew : stepElementWise op')
     (h_lfp' : isLeastFixpoint op'.toMonotoneOp lfp')
-    (h_sub : lfp' ⊆ lfp)  -- Contraction implies lfp' ⊆ lfp
+    (h_sub : lfp' ⊆ lfp) -- Contraction implies lfp' ⊆ lfp
     (h_lfp'_eq_limit : lfp' = iterFLimit op') :
     wfCascadeFix op' lfp = lfp' := by
   apply Set.Subset.antisymm
@@ -328,7 +329,7 @@ theorem wf_contraction_correctness (op' : DecomposedOp α) (lfp lfp' : Set α)
     intro x hx
     simp only [wfCascadeFix, Set.mem_iInter]
     intro n
-    exact lfp'_subset_wfCascadeN op' op' lfp lfp' n h_ew h_lfp' h_sub h_lfp'_eq_limit hx
+    exact lfp'_subset_wfCascadeN op' lfp lfp' n h_ew h_sub h_lfp'_eq_limit hx
 
 /-! ## Semi-Naive Evaluation
 
@@ -487,7 +488,7 @@ lemma semiNaiveCurrent_mono' (op : DecomposedOp α) (init : Set α) (m n : ℕ) 
 lemma step_delta_subset_next (op : DecomposedOp α) (init : Set α) (i : ℕ) :
     op.step (semiNaiveDelta op init i) ⊆ semiNaiveCurrent op init (i + 1) := by
   intro x hx
-  simp only [semiNaiveCurrent, semiNaiveDelta, semiNaiveN, semiNaiveIter, semiNaiveStep]
+  simp only [semiNaiveCurrent, semiNaiveN, semiNaiveIter, semiNaiveStep]
   by_cases h : x ∈ (semiNaiveN op init i).1
   · exact Set.mem_union_left _ h
   · apply Set.mem_union_right
@@ -499,7 +500,7 @@ lemma stable_step_delta_subset (op : DecomposedOp α) (init : Set α) (n : ℕ)
     (h_stable : semiNaiveStable op init n) :
     op.step (semiNaiveDelta op init n) ⊆ semiNaiveCurrent op init n := by
   simp only [semiNaiveStable, semiNaiveDelta, semiNaiveN, semiNaiveIter, semiNaiveStep] at h_stable
-  rw [Set.eq_empty_iff_forall_not_mem] at h_stable
+  rw [Set.eq_empty_iff_forall_notMem] at h_stable
   intro x hx
   by_contra h
   have : x ∈ op.step (semiNaiveN op init n).2 \ (semiNaiveN op init n).1 := by
@@ -538,14 +539,13 @@ lemma semiNaive_stable_step_subset (op : DecomposedOp α) (init : Set α) (n : �
       -- n = 0: need to show step(init) ⊆ init, which follows from stability
       -- Stability: delta_1 = step(init) \ init = ∅, so step(init) ⊆ init
       simp only [semiNaiveStable, semiNaiveDelta, semiNaiveN, semiNaiveIter, semiNaiveStep] at h_stable
-      rw [Set.eq_empty_iff_forall_not_mem] at h_stable
+      rw [Set.eq_empty_iff_forall_notMem] at h_stable
       intro x hx
       by_contra h
       exact h_stable x ⟨hx, h⟩
     | succ n =>
       -- n ≥ 1: step(init) ⊆ current_1 ⊆ current_{n+1}
       have h1 : op.step init ⊆ semiNaiveCurrent op init 1 := step_delta_subset_next op init 0
-      simp only [semiNaiveDelta, semiNaiveN] at h1
       have h2 : semiNaiveCurrent op init 1 ⊆ semiNaiveCurrent op init (n + 1) :=
         semiNaiveCurrent_mono' op init 1 (n + 1) (by omega)
       exact Set.Subset.trans h1 h2
@@ -598,8 +598,8 @@ theorem expansion_correctness (op op' : DecomposedOp α) (lfp lfp' : Set α)
     (h_exp : expands op op')
     (h_lfp : isLeastFixpoint op.toMonotoneOp lfp)
     (h_lfp' : isLeastFixpoint op'.toMonotoneOp lfp')
-    (h_add : stepAdditive op')  -- Step is additive
-    (h_base : op'.base ⊆ lfp)   -- New base contained in old fixpoint
+    (h_add : stepAdditive op') -- Step is additive
+    (h_base : op'.base ⊆ lfp) -- New base contained in old fixpoint
     (n : ℕ) (h_stable : semiNaiveStable op' lfp n) :
     semiNaiveCurrent op' lfp n = lfp' := by
   apply Set.Subset.antisymm
@@ -703,7 +703,6 @@ theorem incremental_update_correct (cfg cfg' : IncrFixpointConfig α)
     (lfp lfp' : Set α)
     (h_lfp : isLeastFixpoint cfg.op.toMonotoneOp lfp)
     (h_lfp' : isLeastFixpoint cfg'.op.toMonotoneOp lfp')
-    (h_lfp_limit : lfp = iterFLimit cfg.op)
     (h_lfp'_limit : lfp' = iterFLimit cfg'.op) :
     -- Expansion case: F ⊑ F' implies lfp ⊆ lfp'
     (expands cfg.op cfg'.op → lfp ⊆ lfp') ∧
@@ -896,6 +895,7 @@ def expandFrom (op : DecomposedOp α) (init frontier : Set α) : Set α :=
     Result should equal lfp(op').
 -/
 def cascadeAndRederive (op op' : DecomposedOp α) (lfp : Set α) (rank : α → ℕ) : Set α :=
+  let _ := op  -- used only to emphasize ranks come from the old operator
   let afterCascade := cascadeFixWithRanks op' rank lfp
   let dying := lfp \ afterCascade
   let frontier := rederiveFrontier op' afterCascade dying
@@ -944,7 +944,7 @@ lemma base_subset_cascadeN (op : DecomposedOp α) (rank : α → ℕ) (init : Se
     (h_base : op.base ⊆ init) :
     op.base ⊆ cascadeNWithRanks op rank init n := by
   induction n with
-  | zero => simp [cascadeNWithRanks]; exact h_base
+  | zero => simp only [cascadeNWithRanks]; exact h_base
   | succ n ih =>
     intro x hx
     simp only [cascadeNWithRanks, cascadeStepWithRanks, shouldDieWithRanks,
@@ -1065,7 +1065,7 @@ lemma cascadeFix_base_or_wfDeriver (op : DecomposedOp α) (rank : α → ℕ)
     · exact ⟨hy_rank, hy_step⟩
 
 /-- Helper for strong induction: all elements with rank < n that survive cascade are in lfp'. -/
-lemma cascade_survivors_in_lfp'_aux (op op' : DecomposedOp α) (lfp lfp' : Set α) (rank : α → ℕ)
+lemma cascade_survivors_in_lfp'_aux (op' : DecomposedOp α) (lfp lfp' : Set α) (rank : α → ℕ)
     (h_lfp' : isLeastFixpoint op'.toMonotoneOp lfp')
     (h_base' : op'.base ⊆ lfp')
     (n : ℕ) :
@@ -1089,23 +1089,23 @@ lemma cascade_survivors_in_lfp'_aux (op op' : DecomposedOp α) (lfp lfp' : Set �
 
 /-- Key lemma: Elements surviving cascade are in lfp'.
     Proof by strong induction on rank. -/
-lemma cascade_survivors_in_lfp' (op op' : DecomposedOp α) (lfp lfp' : Set α) (rank : α → ℕ)
+lemma cascade_survivors_in_lfp' (op' : DecomposedOp α) (lfp lfp' : Set α) (rank : α → ℕ)
     (h_lfp' : isLeastFixpoint op'.toMonotoneOp lfp')
-    (h_sub : lfp' ⊆ lfp)  -- contraction implies lfp' ⊆ lfp
-    (h_base' : op'.base ⊆ lfp')  -- base of new op is in new lfp
+    (h_base' : op'.base ⊆ lfp') -- base of new op is in new lfp
     (x : α) (hx : x ∈ cascadeFixWithRanks op' rank lfp) :
     x ∈ lfp' :=
-  cascade_survivors_in_lfp'_aux op op' lfp lfp' rank h_lfp' h_base' (rank x + 1) x hx (Nat.lt_succ_self _)
+  cascade_survivors_in_lfp'_aux op' lfp lfp' rank h_lfp' h_base' (rank x + 1) x hx (Nat.lt_succ_self _)
 
 /-- Frontier elements are derived from survivors, so they're in lfp'. -/
 lemma frontier_subset_lfp' (op' : DecomposedOp α) (lfp lfp' : Set α) (rank : α → ℕ)
     (h_lfp' : isLeastFixpoint op'.toMonotoneOp lfp')
-    (h_sub : lfp' ⊆ lfp)
     (h_base' : op'.base ⊆ lfp')
     (afterCascade : Set α)
     (h_ac : afterCascade = cascadeFixWithRanks op' rank lfp)
     (h_ac_lfp' : afterCascade ⊆ lfp') :
     rederiveFrontier op' afterCascade (lfp \ afterCascade) ⊆ lfp' := by
+  have _ := h_base'
+  have _ := h_ac
   intro y hy
   simp only [rederiveFrontier, Set.mem_sep_iff] at hy
   obtain ⟨_, x, hx_surv, hy_step⟩ := hy
@@ -1133,7 +1133,7 @@ lemma iterStep_subset_lfp' (op' : DecomposedOp α) (lfp' : Set α) (frontier : S
     (h_frontier : frontier ⊆ lfp') :
     (fun S => op'.step S)^[n] frontier ⊆ lfp' := by
   induction n with
-  | zero => simp; exact h_frontier
+  | zero => exact h_frontier
   | succ n ih =>
     simp only [Function.iterate_succ', Function.comp_apply]
     intro x hx
@@ -1171,7 +1171,7 @@ the NEW rank (from op').
     Note: requires x ∈ lfp to ensure x can be in the frontier if not in afterCascade. -/
 lemma in_cascade_or_reachable_in_result (op op' : DecomposedOp α) (lfp : Set α) (rank : α → ℕ)
     (x : α) (y : α)
-    (hx_lfp : x ∈ lfp)  -- Added: x must be in lfp to potentially be in frontier
+    (hx_lfp : x ∈ lfp) -- Added: x must be in lfp to potentially be in frontier
     (hy_result : y ∈ cascadeAndRederive op op' lfp rank)
     (hx_step : x ∈ op'.step {y}) :
     x ∈ cascadeAndRederive op op' lfp rank := by
@@ -1189,7 +1189,7 @@ lemma in_cascade_or_reachable_in_result (op op' : DecomposedOp α) (lfp : Set α
       use 0
       simp only [Function.iterate_zero, id_eq]
       -- Show x ∈ frontier = rederiveFrontier op' afterCascade (lfp \ afterCascade)
-      simp only [rederiveFrontier, Set.mem_sep_iff, Set.mem_diff]
+      simp only [rederiveFrontier, Set.mem_diff]
       constructor
       · exact ⟨hx_lfp, hx_cascade⟩
       · exact ⟨y, hy_cascade, hx_step⟩
@@ -1251,7 +1251,7 @@ lemma iterF_in_result (op op' : DecomposedOp α) (lfp lfp' : Set α) (rank : α 
   | zero =>
     intro x hx
     simp only [iterF] at hx
-    exact absurd hx (Set.not_mem_empty x)
+    exact absurd hx (Set.notMem_empty x)
   | succ n ih =>
     intro x hx
     simp only [iterF, DecomposedOp.F, DecomposedOp.toMonotoneOp, Set.mem_union] at hx
@@ -1297,6 +1297,8 @@ theorem cascade_rederive_correct' (op op' : DecomposedOp α) (lfp lfp' : Set α)
     (h_lfp'_limit : lfp' = iterFLimit op')
     (h_rank : ∀ x ∈ lfp, ∀ m, firstAppears op x m → rank x = m) :
     cascadeAndRederive op op' lfp rank = lfp' := by
+  have _ := h_lfp_limit
+  have _ := h_rank
   apply Set.Subset.antisymm
   · -- Soundness: cascadeAndRederive ⊆ lfp'
     have h_sub : lfp' ⊆ lfp := lfp_mono_contract op op' lfp lfp' h_con h_lfp h_lfp'
@@ -1307,9 +1309,9 @@ theorem cascade_rederive_correct' (op op' : DecomposedOp α) (lfp lfp' : Set α)
     let afterCascade := cascadeFixWithRanks op' rank lfp
     have h_ac_lfp' : afterCascade ⊆ lfp' := by
       intro x hx
-      exact cascade_survivors_in_lfp' op op' lfp lfp' rank h_lfp' h_sub h_base' x hx
+      exact cascade_survivors_in_lfp' op' lfp lfp' rank h_lfp' h_base' x hx
     have h_frontier_lfp' : rederiveFrontier op' afterCascade (lfp \ afterCascade) ⊆ lfp' :=
-      frontier_subset_lfp' op' lfp lfp' rank h_lfp' h_sub h_base' afterCascade rfl h_ac_lfp'
+      frontier_subset_lfp' op' lfp lfp' rank h_lfp' h_base' afterCascade rfl h_ac_lfp'
     simp only [cascadeAndRederive]
     exact expandFrom_subset_lfp' op' lfp' afterCascade
       (rederiveFrontier op' afterCascade (lfp \ afterCascade))
