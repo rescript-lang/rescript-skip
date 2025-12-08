@@ -2257,6 +2257,44 @@ Only use `lazyCompute`/`fixpoint` when:
 
 ---
 
+## Observation: No Anti-Join Patterns in These Examples
+
+**None of the 48 examples above require anti-join or set difference.**
+
+Every example uses:
+- Positive matches via map-with-lookup (joins)
+- Reducers (sum, count, min/max with enrichment)
+- Structural operations (slice, merge)
+
+### Useful reactive patterns that are NOT expressible
+
+Anti-join patterns are common in reactive services:
+
+| Pattern | Input collections | Output | Use case |
+|---------|-------------------|--------|----------|
+| Orphan detection | `orders`, `customers` | Orders with no matching customer | Data integrity alerts |
+| Unacknowledged alerts | `alerts`, `acknowledgments` | Alerts with no ack entry | Pending-item dashboard |
+| Unassigned tickets | `tickets`, `assignments` | Tickets with no assignment | Queue management |
+| Stale inventory | `products`, `recentSales` | Products with no recent sale | Restocking triggers |
+| Expired sessions | `sessions`, `heartbeats` | Sessions with no heartbeat | Cleanup candidates |
+
+All of these require filtering one collection based on **absence** in another—which Skip cannot express.
+
+### Why the gap exists in this catalogue
+
+The research prompts (see `research/deep_research_prompt_*.txt`) focused on **aggregation patterns**:
+- Per-key reducers (sum, count, avg, min/max)
+- Windowed and session-based aggregates
+- Graph and incremental view maintenance
+- FRP/UI state patterns
+
+The prompts did not ask about **relational algebra completeness**.
+The 48 examples reflect this scope—they answer "What aggregation patterns can Skip express?" not "Is Skip relationally complete?"
+
+Skip's current operators cannot express "keep entries from R₁ whose key does not appear in R₂".
+
+---
+
 ## Next Steps
 
 1. **Formalize Tier 2 reducers** (count, sum) with well-formedness proofs

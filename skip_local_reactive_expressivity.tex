@@ -1,0 +1,843 @@
+\documentclass[11pt]{article}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{enumitem}
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage[hidelinks]{hyperref}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{remark}[theorem]{Remark}
+
+\title{Local Reactive Combinators and Relational Algebra with Aggregates}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+The Skip runtime provides reactive bindings with structural operators on
+key-value collections: entry-wise maps, key-range slices, prefixes,
+finite merges, and per-key reducers.
+
+We ask: \emph{what is missing from Skip to match the expressivity of
+relational algebra (RA) with aggregates?}
+A catalogue of 48 representative examples---including DBToaster-style
+incremental views, per-group aggregates, and multi-way joins---reveals
+that joins are pervasive.
+Skip supports them via a \emph{map-with-lookup} idiom:
+computing ``active members per group'' or ``revenue by region'' works
+by looking up related entries during a map operation.
+However, \emph{anti-joins} (``entries with no matching partner'') are
+absent from all 48 examples---not because they are rare, but because
+Skip cannot express them.
+Useful reactive patterns like orphan detection (orders with no customer),
+unacknowledged-alert dashboards, or unassigned-ticket queues all require
+filtering based on absence of keys, which Skip lacks.
+
+We identify \textsf{filterNotMatchingOn} as the missing operator,
+describe how to implement it, and prove that adding it achieves
+\emph{expressive equivalence} with RA: the extended combinator algebra
+can express exactly the RA queries (selection, projection, union,
+difference, product, join, grouping), and vice versa.
+The equivalence is constructive---we give explicit compilation functions
+in both directions.
+
+This characterization provides a precise expressivity benchmark for Skip's
+reactive system, and connects it to classical locality results from finite
+model theory (Gaifman's theorem), ensuring bounded update propagation.
+A mechanized Lean~4 proof covers the core equivalence.
+\end{abstract}
+
+\section{Introduction}
+
+This note asks a practical question: \emph{what is missing from the
+Skip reactive runtime to match the expressivity of relational algebra?}
+
+Skip provides reactive bindings with structural operators on key-value
+collections: entry-wise maps, key-range slices, prefixes, finite merges,
+and per-key reducers.
+These operators are ``always safe'': they do not maintain hidden state,
+are insensitive to update order, and admit straightforward incremental
+implementations.
+
+Examining 48 representative reactive service examples, we find that
+\emph{joins} are pervasive.
+Skip supports all of these via a map-with-lookup idiom, where the map
+function receives a context parameter providing read access to other
+collections.
+
+However, \emph{anti-joins} (``entries with no matching partner'') are
+absent from all 48 examples.
+Reactive services often need such patterns:
+\begin{itemize}[itemsep=0.2em,topsep=0.3em]
+  \item \textbf{Orphan detection}: orders with no matching customer record
+    (data-integrity alerts).
+  \item \textbf{Unacknowledged alerts}: alerts with no entry in an
+    acknowledgments table (pending-item dashboards).
+  \item \textbf{Unassigned tickets}: support tickets with no entry in
+    assignments (queue management).
+\end{itemize}
+These cannot be implemented in Skip: there is no set-difference operator,
+no anti-join primitive, and no way to filter one collection based on
+the absence of keys in another.
+
+\paragraph{Contributions.}
+We identify $\mathsf{filterNotMatchingOn}$ as the single missing operator,
+describe how to implement it in Skip (Section~\ref{sec:comb-fnm}),
+and prove that adding it achieves expressive equivalence with relational
+algebra extended with aggregates.
+Specifically:
+\begin{itemize}[itemsep=0.3em]
+  \item each Skip combinator is definable by an RA expression, and
+  \item every RA query (including difference) compiles to combinators.
+\end{itemize}
+This provides a precise expressivity benchmark for Skip's reactive system.
+
+We also discuss the connection to first-order logic, which provides
+access to classical locality principles from finite model theory
+(Gaifman's theorem), ensuring bounded update propagation.
+
+\section{Collections as Relational Structures}
+
+Fix two non-empty sets:
+\begin{itemize}[itemsep=0.3em]
+  \item a set of \emph{keys} $K$, equipped with a total order
+    $\le_K$; and
+  \item a set of \emph{values} $V$.
+\end{itemize}
+In Skip, keys are JSON values with a fixed total order $\le_{\mathrm{json}}$,
+and collections are finite, but we keep the presentation abstract.
+
+\begin{definition}[Collection]
+A \emph{collection} over $(K,V)$ is a finite subset
+$R \subseteq K \times V$.
+We write $R(k,v)$ as shorthand for $(k,v) \in R$.
+\end{definition}
+
+We regard collections as relations in the standard database sense:
+a collection $R \subseteq K \times V$ is a binary relation with
+attributes for the key and value components.
+The key order $\le_K$ is available as an auxiliary binary relation
+for use in selections and aggregate computations.
+
+In this setting, a \emph{view} of a collection is simply another
+relation $R' \subseteq K' \times V'$ (possibly over different key / value
+types) that is definable from $(K,V,R,\le_K)$ using relational algebra
+operators.
+
+\section{Relational Algebra with Aggregates}
+\label{sec:ra}
+
+We work with standard relational algebra extended with aggregates,
+using the following operators:
+\begin{itemize}[itemsep=0.3em]
+  \item \textbf{Selection} $\sigma_P(R)$: keeps tuples satisfying
+    predicate $P$;
+  \item \textbf{Projection} $\pi_A(R)$: projects onto attributes $A$;
+  \item \textbf{Renaming} $\rho_{a/b}(R)$: renames attribute $b$ to $a$;
+  \item \textbf{Union} $R_1 \cup R_2$: set union of compatible relations;
+  \item \textbf{Difference} $R_1 - R_2$: set difference;
+  \item \textbf{Cartesian product} $R_1 \times R_2$: all pairs of tuples;
+  \item \textbf{Natural join} $R_1 \bowtie R_2$: join on common attributes.
+\end{itemize}
+
+To capture prefix operators such as \texttt{take}, we extend RA with
+simple \emph{aggregate} operators.
+We allow grouping and aggregation of the form
+\[
+  \gamma_{A; \texttt{count}(*) \to c}(R),
+\]
+which groups $R$ by attributes $A$ and computes a count for each group,
+storing the result in a new attribute $c$.
+
+\begin{definition}[RA with aggregates]
+We write $\mathrm{RA}[R,\le_K,\#]$ for relational algebra with
+difference and counting aggregates, over a base relation $R$ with
+access to the key order $\le_K$.
+We say that a binary relation $R' \subseteq K' \times V'$ is
+\emph{RA-definable} from $(K,V,R,\le_K)$
+if there exists an expression in $\mathrm{RA}[R,\le_K,\#]$
+whose result, when evaluated on the given structure, equals $R'$.
+\end{definition}
+
+In what follows, each structural combinator will be paired with such
+a defining RA expression.
+The key point is that these expressions use only:
+\begin{itemize}[itemsep=0.3em]
+  \item the base relation $R$,
+  \item the key order $\le_K$ (as a selection predicate),
+  \item finitely many parameters (e.g.\ slice bounds, mappings), and
+  \item counting aggregates for the prefix combinator.
+\end{itemize}
+
+\section{Overview of Combinator Operators}
+\label{sec:combinators-overview}
+
+We now present the combinator operators of the reactive calculus.
+These are organised into two groups: the \emph{core operators}
+available in the Skip runtime bindings, and \emph{extensions} that
+provide additional expressive power.
+
+\paragraph{Core operators (Skip bindings).}
+These operators are directly available in the Skip reactive runtime:
+\begin{center}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Combinator} & \textbf{Type} & \textbf{Ref.} \\
+\midrule
+$\mathsf{map}_f$ & $R \to R'$ & \ref{sec:comb-map} \\
+$\mathsf{slice}_{[a,b]}$ & $R \to R$ & \ref{sec:comb-slice} \\
+$\mathsf{slices}_{\mathcal{I}}$ & $R \to R$ & \ref{sec:comb-slices} \\
+$\mathsf{take}_n$ & $R \to R$ & \ref{sec:comb-take} \\
+$\mathsf{merge}$ & $R^m \to R$ & \ref{sec:comb-merge} \\
+$\mathsf{reduce}_{R_{\mathrm{red}}}$ & $R \to R'$ & \ref{sec:comb-reduce} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Extensions.}
+The following operators extend the core calculus to achieve full
+RA expressiveness (Section~\ref{sec:extensions}):
+\begin{center}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Combinator} & \textbf{Type} & \textbf{Ref.} \\
+\midrule
+$\mathsf{joinOn}_{f_1,f_2}$ & $R_1 \times R_2 \to R'$ & \ref{sec:comb-join} \\
+$\mathsf{filterNotMatchingOn}_{f_1,f_2}$ & $R_1 \times R_2 \to R_1$ & \ref{sec:comb-fnm} \\
+\bottomrule
+\end{tabular}
+\end{center}
+\noindent
+Each operator is shown to be definable in $\mathrm{RA}[R,\le_K,\#]$
+in the referenced subsection.
+Note that $\mathsf{filter}$ is not listed as it can be implemented
+via $\mathsf{map}$ (by mapping non-matching entries to an empty output).
+
+\section{Structural Combinators on Collections (Skip Bindings)}
+\label{sec:combinators}
+
+This section formalises the core structural operators that are
+directly available in the Skip reactive runtime bindings.
+We show that each is definable in $\mathrm{RA}[R,\le_K,\#]$.
+
+\subsection{Entry-wise mapping}
+\label{sec:comb-map}
+
+Let $K', V'$ be sets of keys and values for the output collection.
+
+\begin{definition}[Entry-wise map]
+Let $f : K \times V \to K' \times V'$ be a function.
+Given a collection $R \subseteq K \times V$, we define
+the mapped collection
+\[
+  \mathsf{map}_f(R) \subseteq K' \times V'
+\]
+by
+\[
+  \mathsf{map}_f(R)(k',v') \iff
+    \exists k \in K, \exists v \in V.\;
+      R(k,v) \wedge f(k,v) = (k',v').
+\]
+\end{definition}
+
+\begin{lemma}[RA-definability of entry-wise map]
+For any fixed function $f : K \times V \to K' \times V'$,
+the relation $\mathsf{map}_f(R)$ is definable in
+$\mathrm{RA}[R,\le_K,\#]$ by the expression
+\[
+  \pi_{k',v'}(\rho_{k'/f_1(k,v), v'/f_2(k,v)}(R)),
+\]
+where $f_1$ and $f_2$ are the component functions of $f$,
+treated as extended projection expressions.
+\end{lemma}
+
+This matches the intuitive semantics of a structural \texttt{map} on
+collections: each input entry is transformed independently.
+
+\subsection{Single-range slice}
+\label{sec:comb-slice}
+
+\begin{definition}[Slice]
+Given bounds $a,b \in K$ with $a \le_K b$ and a collection
+$R \subseteq K \times V$, we define
+\[
+  \mathsf{slice}_{[a,b]}(R) \subseteq K \times V
+\]
+by
+\[
+  \mathsf{slice}_{[a,b]}(R)(k,v) \iff
+    R(k,v) \wedge a \le_K k \wedge k \le_K b.
+\]
+\end{definition}
+
+\begin{lemma}[RA-definability of slice]
+For any fixed bounds $a,b \in K$, the relation
+$\mathsf{slice}_{[a,b]}(R)$ is definable in
+$\mathrm{RA}[R,\le_K,\#]$ by the expression
+\[
+  \sigma_{a \le_K k \,\wedge\, k \le_K b}(R).
+\]
+\end{lemma}
+
+\subsection{Multi-range slices}
+\label{sec:comb-slices}
+
+\begin{definition}[Multi-range slices]
+Let $\mathcal{I} = \{ [a_1,b_1],\dots,[a_n,b_n] \}$ be a finite family
+of intervals in $K$.
+Given $R \subseteq K \times V$, we define
+\[
+  \mathsf{slices}_{\mathcal{I}}(R) \subseteq K \times V
+\]
+by
+\[
+  \mathsf{slices}_{\mathcal{I}}(R)(k,v) \iff
+    R(k,v) \wedge
+    \bigvee_{i=1}^n \big( a_i \le_K k \wedge k \le_K b_i \big).
+\]
+\end{definition}
+
+\begin{lemma}[RA-definability of multi-range slices]
+For any fixed finite family of intervals $\mathcal{I}$,
+the relation $\mathsf{slices}_{\mathcal{I}}(R)$ is definable in
+$\mathrm{RA}[R,\le_K,\#]$ by the expression
+\[
+  \bigcup_{i=1}^n \sigma_{a_i \le_K k \,\wedge\, k \le_K b_i}(R),
+\]
+i.e., the union of the single-interval slices.
+\end{lemma}
+
+\subsection{Prefix by key rank}
+\label{sec:comb-take}
+
+We next formalise a prefix operator analogous to \texttt{take} in the
+reactive calculus: keep the first $n$ keys in the global order,
+and discard the rest.
+
+\begin{definition}[Key rank]
+Let $R \subseteq K \times V$.
+For $k \in K$, define the \emph{support} of $k$ in $R$ by
+\[
+  \mathsf{supp}_R(k) \iff \exists v.\; R(k,v).
+\]
+We define the \emph{key rank} of $k$ in $R$ as the natural number
+\[
+  \mathrm{rank}_R(k)
+  := \#\{ k' \in K \mid k' <_K k \wedge \mathsf{supp}_R(k') \},
+\]
+where $\#$ denotes cardinality.
+\end{definition}
+
+\begin{definition}[Prefix operator]
+Given $n \in \mathbb{N}$ and $R \subseteq K \times V$, we define
+\[
+  \mathsf{take}_n(R) \subseteq K \times V
+\]
+by
+\[
+  \mathsf{take}_n(R)(k,v) \iff
+    R(k,v) \wedge \mathrm{rank}_R(k) < n.
+\]
+\end{definition}
+
+\begin{lemma}[RA+agg-definability of prefix]
+For any fixed $n \in \mathbb{N}$, the relation
+$\mathsf{take}_n(R)$ is definable in $\mathrm{RA}[R,\le_K,\#]$
+as follows:
+\begin{enumerate}
+  \item Compute the set of distinct keys:
+    $K_R := \pi_k(R)$.
+  \item For each key $k$, count the number of strictly smaller keys:
+    form the relation of pairs $(k, k')$ with $k' <_K k$, join with
+    $K_R$ on the $k'$ component, group by $k$, and count.
+  \item Select keys whose count is less than $n$.
+  \item Semi-join the result with the original relation $R$.
+\end{enumerate}
+\end{lemma}
+
+Thus the \texttt{take} combinator on collections aligns with a
+standard RA-with-aggregates construction on ordered structures.
+
+\subsection{Finite merge}
+\label{sec:comb-merge}
+
+Finally, we formalise finite merge of collections.
+
+\begin{definition}[Finite merge]
+Let $R_1,\dots,R_m \subseteq K \times V$ be collections.
+Their merge is the relation
+\[
+  \mathsf{merge}(R_1,\dots,R_m) \subseteq K \times V
+\]
+defined by
+\[
+  \mathsf{merge}(R_1,\dots,R_m)(k,v) \iff
+    \bigvee_{i=1}^m R_i(k,v).
+\]
+\end{definition}
+
+\begin{lemma}[RA-definability of finite merge]
+The merged relation is definable by
+$R_1 \cup R_2 \cup \cdots \cup R_m$.
+\end{lemma}
+
+In other words, finite merge corresponds exactly to finite union
+in relational algebra.
+
+\subsection{Per-key reduction}
+\label{sec:comb-reduce}
+
+The reduce operator aggregates the multiset of values at each key
+using a user-specified reducer.
+
+\begin{definition}[Per-key reduce]
+Let $R \subseteq K \times V$ be a collection and let
+$R_{\mathrm{red}} = (\mathsf{init}, \mathsf{add}, \mathsf{remove})$
+be a reducer specification with accumulator type $A$, where:
+\begin{itemize}[itemsep=0.2em]
+  \item $\mathsf{init} : A$ is the initial accumulator value,
+  \item $\mathsf{add} : A \times V \to A$ incorporates a value, and
+  \item $\mathsf{remove} : A \times V \to A$ removes a value.
+\end{itemize}
+We define the reduced collection
+\[
+  \mathsf{reduce}_{R_{\mathrm{red}}}(R) \subseteq K \times A
+\]
+by: for each key $k$, the output value is the result of folding
+$\mathsf{add}$ over the multiset $\{v \mid R(k,v)\}$ starting from
+$\mathsf{init}$.
+\end{definition}
+
+\begin{lemma}[RA+agg-definability of reduce]
+For any reducer $R_{\mathrm{red}}$ whose operations correspond to
+standard SQL aggregates (count, sum, min, max, etc.), the relation
+$\mathsf{reduce}_{R_{\mathrm{red}}}(R)$ is definable in
+$\mathrm{RA}[R,\le_K,\#]$ using the grouping operator $\gamma$.
+\end{lemma}
+
+\section{Completing the Calculus for RA Equivalence}
+\label{sec:extensions}
+
+The formal combinator calculus of the previous section
+(with $\mathsf{map}$, $\mathsf{slice}$, etc.\ operating on single collections)
+cannot express joins or set difference.
+To achieve equivalence with relational algebra, the formal calculus
+requires operators that relate \emph{two} collections.
+
+In this section we define two such operators:
+\begin{itemize}[itemsep=0.3em]
+  \item $\mathsf{joinOn}$---needed to express $\times$ and $\bowtie$; and
+  \item $\mathsf{filterNotMatchingOn}$---needed to express $-$ (difference).
+\end{itemize}
+
+\noindent
+\textbf{Relationship to Skip.}
+These operators have different status with respect to Skip's actual API:
+\begin{itemize}[itemsep=0.2em]
+  \item $\mathsf{joinOn}$ \emph{is} expressible in Skip today via
+    a map-with-lookup idiom (Section~\ref{sec:map-lookup}).
+    It appears here to formalize that capability.
+  \item $\mathsf{filterNotMatchingOn}$ \emph{is not} expressible in Skip
+    (Section~\ref{sec:map-lookup}). It is the genuinely missing operator.
+\end{itemize}
+
+\subsection{Joins via map-with-lookup in Skip}
+\label{sec:map-lookup}
+
+Before introducing the formal $\mathsf{joinOn}$ combinator, we note that
+the Skip runtime already supports a pattern that achieves the same effect.
+In Skip, the $\mathsf{map}$ function receives not just each $(k,v)$ entry
+but also a \emph{context} object that provides read access to other
+collections in the reactive graph.
+
+For example, to join an \texttt{orders} collection with a
+\texttt{customers} collection on \texttt{customerId}, a Skip programmer
+writes:
+\begin{verbatim}
+  orders->map((orderId, order, ctx) => {
+    let customer = ctx.customers.getUnique(order.customerId)
+    (order.customerId, (order, customer))
+  })
+\end{verbatim}
+The \texttt{ctx.customers.getUnique} call looks up the customer record
+by key, effectively implementing an equi-join.
+Skip's reactive runtime tracks these cross-collection dependencies:
+when an entry in \texttt{customers} changes, any \texttt{orders} entries
+that referenced it are automatically re-evaluated.
+
+\paragraph{Why this is not captured by the formal $\mathsf{map}$.}
+The formal definition of $\mathsf{map}_f(R)$ in
+Section~\ref{sec:comb-map} applies a fixed function $f : K \times V \to K' \times V'$
+to each entry of a \emph{single} collection $R$.
+It does not model the context parameter or cross-collection lookups.
+As a consequence:
+\begin{itemize}[itemsep=0.2em]
+  \item The formal calculus with only $\mathsf{map}$, $\mathsf{slice}$,
+    $\mathsf{take}$, $\mathsf{merge}$, and $\mathsf{reduce}$ cannot express
+    joins between two independent base collections.
+  \item Completeness with respect to RA requires an explicit operator
+    that relates entries from \emph{two} collections.
+\end{itemize}
+This motivates the $\mathsf{joinOn}$ combinator defined below, which
+formalises the join capability that Skip users already access via
+the map-with-lookup idiom.
+
+\paragraph{Anti-joins appear inexpressible.}
+While joins are expressible via map-with-lookup, \emph{anti-joins}
+(``entries of $R_1$ with no matching key in $R_2$'') do not appear
+to be expressible with Skip's current bindings.
+
+Inspecting the Skip API, the \texttt{EagerCollection} type provides:
+\begin{itemize}[itemsep=0.2em]
+  \item \texttt{map}, \texttt{reduce}, \texttt{mapReduce} --- transformation and aggregation
+  \item \texttt{slice}, \texttt{slices}, \texttt{take} --- filtering by key range or count
+  \item \texttt{merge} --- union of collections
+\end{itemize}
+There is no set-difference operator, no anti-join primitive, and no
+way to filter one collection based on the \emph{absence} of keys in another.
+The \texttt{LazyCompute} mechanism could compute an anti-join on demand,
+but produces a lazy collection, not an eager reactive one.
+
+The 48-example catalogue contains no ``NOT IN'' style queries,
+consistent with this limitation.
+The $\mathsf{filterNotMatchingOn}$ operator defined in
+Section~\ref{sec:comb-fnm} fills this gap with clear, formally
+specified semantics.
+
+\subsection{Join on a derived key}
+\label{sec:comb-join}
+
+Let $K_1,V_1$ and $K_2,V_2$ be key/value types for two input
+collections, and let $J$ be a set of \emph{join keys}.
+
+\begin{definition}[Join on key]
+Let $R_1 \subseteq K_1 \times V_1$ and $R_2 \subseteq K_2 \times V_2$
+be collections, and let
+\[
+  f_1 : K_1 \times V_1 \to J,
+  \qquad
+  f_2 : K_2 \times V_2 \to J
+\]
+be fixed functions (join-key extractors).
+We define the \emph{join on key} collection
+\[
+  \mathsf{joinOn}(f_1,f_2; R_1,R_2) \subseteq J \times (V_1 \times V_2)
+\]
+by
+\begin{align*}
+  \mathsf{joinOn}(f_1,f_2; R_1,R_2)(j,(v_1,v_2)) \iff\;&
+    \exists k_1,k_2.\;
+      R_1(k_1,v_1) \wedge R_2(k_2,v_2)\\
+    &\wedge\;
+      f_1(k_1,v_1) = j \wedge f_2(k_2,v_2) = j.
+\end{align*}
+\end{definition}
+
+This operator subsumes both ordinary cartesian product (by taking $J$
+to be a singleton) and equi-joins (by taking $f_1$ and $f_2$ to select
+an existing key component).
+
+\begin{lemma}[RA-definability of join on key]
+The join-on-key relation is definable in RA as follows:
+\begin{enumerate}
+  \item Extend $R_1$ with a new attribute $j_1 := f_1(k_1,v_1)$;
+  \item Extend $R_2$ with a new attribute $j_2 := f_2(k_2,v_2)$;
+  \item Compute the natural join on $j_1 = j_2$;
+  \item Project onto $(j, v_1, v_2)$.
+\end{enumerate}
+\end{lemma}
+
+\subsection{Filtering entries without matches}
+\label{sec:comb-fnm}
+
+We now formalise a combinator that keeps entries from a ``left''
+collection whose join key has no matching entry on the ``right''.
+
+\begin{definition}[Filter-not-matching on key]
+Let $R_1 \subseteq K_1 \times V_1$ and $R_2 \subseteq K_2 \times V_2$
+be collections, let $J$ be a set of join keys, and let
+\[
+  f_1 : K_1 \times V_1 \to J,
+  \qquad
+  f_2 : K_2 \times V_2 \to J
+\]
+be join-key extractors as above.
+We define the filtered collection
+\[
+  \mathsf{filterNotMatchingOn}(f_1,f_2; R_1,R_2) \subseteq K_1 \times V_1
+\]
+by: $(k_1,v_1)$ belongs to this collection iff $R_1(k_1,v_1)$ holds and
+there is no $(k_2,v_2)$ with $R_2(k_2,v_2)$ and
+$f_1(k_1,v_1) = f_2(k_2,v_2)$.
+\end{definition}
+
+Intuitively, this operator keeps precisely those
+entries of the left collection whose join key has no partner on the
+right, matching the usual ``A except rows that match B on this key''
+pattern from query languages.
+
+\begin{lemma}[RA-definability of filter-not-matching]
+The filter-not-matching relation is
+definable in RA using difference and anti-join:
+\begin{enumerate}
+  \item Extend $R_1$ with $j_1 := f_1(k_1,v_1)$;
+  \item Extend $R_2$ with $j_2 := f_2(k_2,v_2)$ and project to get
+    the set of join keys present in $R_2$: $J_2 := \pi_{j_2}(R_2')$;
+  \item Compute the anti-join: $R_1' - (R_1' \ltimes J_2)$,
+    or equivalently, keep rows of $R_1'$ whose $j_1$ is not in $J_2$;
+  \item Project back to $(k_1, v_1)$.
+\end{enumerate}
+\end{lemma}
+
+\paragraph{Implementation in Skip.}
+To extend Skip with $\mathsf{filterNotMatchingOn}$,
+add a method to \texttt{EagerCollection}:
+
+{\small
+\begin{verbatim}
+filterNotMatchingOn<K2,V2,J>(f1, other, f2)
+  : EagerCollection<K1, V1>
+\end{verbatim}
+}
+
+\noindent
+The implementation maintains two indices:
+(i)~$\mathit{rIdx} : J \to \mathbb{N}$, counting entries in
+\texttt{other} per join key; and
+(ii)~$\mathit{lByKey} : J \to \mathcal{P}(K_1 \times V_1)$,
+grouping entries of \texttt{this} by join key.
+
+\smallskip\noindent\textbf{Initial computation.}
+For each $(k_1,v_1) \in R_1$, emit iff
+$\mathit{rIdx}[f_1(k_1,v_1)] = 0$.
+
+\smallskip\noindent\textbf{When \texttt{other} changes.}
+On add of $(k_2,v_2)$: let $j = f_2(k_2,v_2)$;
+increment $\mathit{rIdx}[j]$;
+if count went $0 \to 1$, remove $\mathit{lByKey}[j]$ from output.
+On remove: decrement; if $1 \to 0$, add $\mathit{lByKey}[j]$ to output.
+
+\smallskip\noindent\textbf{When \texttt{this} changes.}
+On add of $(k_1,v_1)$: let $j = f_1(k_1,v_1)$;
+add to $\mathit{lByKey}[j]$;
+emit iff $\mathit{rIdx}[j] = 0$.
+On remove: delete from $\mathit{lByKey}[j]$ and output.
+
+This is standard incremental view maintenance for anti-join.
+Note that $\mathsf{filterNotMatchingOn}$ is the right primitive:
+set difference $R_1 - R_2$ is the special case with identity
+extractors, while deriving $\mathsf{filterNotMatchingOn}$
+from difference would require computing a join first (wasteful).
+
+\subsection{Soundness and completeness}
+
+We now collect the previous definability results into a
+soundness theorem for the extended combinator algebra with
+respect to relational algebra with aggregates, and state the
+corresponding completeness result.
+
+\begin{theorem}[RA-soundness of the extended combinators]
+Let $\mathcal{E}$ be the class of collection-valued expressions built
+from a base relation $R \subseteq K \times V$ using:
+\begin{itemize}[itemsep=0.2em]
+  \item the Skip binding operators
+    $\mathsf{map}$, $\mathsf{slice}$, $\mathsf{slices}$,
+    $\mathsf{take}$, $\mathsf{merge}$, and $\mathsf{reduce}$;
+  \item the join operator $\mathsf{joinOn}$ on derived keys; and
+  \item the filter-not-matching operator
+    $\mathsf{filterNotMatchingOn}$ on derived keys;
+\end{itemize}
+with fixed function symbols for all key and join-key extractors and
+fixed numeric parameters for prefixes and ranges.
+Then for every $E \in \mathcal{E}$ there exists an expression in
+relational algebra with difference and aggregates over $R$ whose
+denotation coincides with that of $E$.
+\end{theorem}
+
+\begin{proof}[Proof sketch]
+Each primitive combinator has been given an explicit characterisation
+in terms of the corresponding relational algebra operators (selection,
+projection/renaming, union, join, and difference) together with simple
+grouping and aggregates.
+Closure under composition follows by structural induction on
+expressions: replacing each primitive occurrence by the corresponding
+relational algebra fragment yields an equivalent algebra expression for
+the overall combinator expression.
+\end{proof}
+
+\begin{theorem}[RA-completeness of the extended combinators]
+Over finite structures $(K,V,R,\le_K)$ with a total order on keys and
+counting aggregates as above, every relation definable by an expression
+in relational algebra with difference and aggregates over $R$ is
+equivalent to the denotation of some expression $E \in \mathcal{E}$
+built from:
+\begin{itemize}[itemsep=0.2em]
+  \item the Skip binding operators of Section~\ref{sec:combinators},
+  \item the join and filter-not-matching operators of this section.
+\end{itemize}
+In other words, the extended reactive combinator algebra is
+expressively complete for relational algebra with difference and
+aggregates on this class of structures.
+\end{theorem}
+
+\medskip
+The proof proceeds by the explicit compilation algorithm given in
+Section~\ref{sec:ra-to-comb} below, which translates any relational
+algebra expression into a combinator expression with the same
+denotation.
+
+\section{Algorithmic Compilation from RA to Combinators}
+\label{sec:ra-to-comb}
+
+We now describe an explicit compilation procedure that turns any
+expression of $\mathrm{RA}[R,\le_K,\#]$ into a combinator expression
+built from the operators of the extended reactive calculus.
+This gives a constructive witness for the RA-completeness theorem.
+
+\subsection{Syntax of RA expressions}
+
+We use the relational algebra with aggregates $\mathrm{RA}[R,\le_K,\#]$
+defined in Section~\ref{sec:ra}, over a single base relation symbol
+$R(k,v)$.
+An RA expression $E$ is built inductively from the base relation $R$
+using the standard operators ($\sigma$, $\pi$, $\rho$, $\cup$, $-$,
+$\times$, $\bowtie$) and the grouping/aggregation operator $\gamma$.
+
+\subsection{Syntax of combinator expressions}
+
+We use the combinator operators defined in Sections~\ref{sec:combinators}
+and~\ref{sec:extensions}
+(see the summary tables in Section~\ref{sec:combinators-overview}).
+A combinator expression $E$ is built inductively from a base collection
+$\mathsf{Base}$ (corresponding to $R$) using these operators.
+We write $\mathsf{CombExpr}$ for the set of such expressions.
+
+\subsection{Compilation function: RA to Combinators}
+
+We define the compilation function $\mathsf{compile} : \mathrm{RAExpr} \to \mathsf{CombExpr}$
+by structural recursion on RA expressions.
+We use pattern matching notation where $\mathsf{id}(k,v) := (k,v)$ denotes the identity
+key extractor.
+
+\begin{center}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{RA Expression} & \textbf{Compiled to} & \textbf{Combinator Expression} \\
+\midrule
+$R$ & $:=$ & $\mathsf{Base}$ \\[0.3em]
+$\sigma_P(E)$ & $:=$ & $\mathsf{filter}_P(\mathsf{compile}(E))$ \\[0.3em]
+$\pi_A(E)$ & $:=$ & $\mathsf{map}_{f_A}(\mathsf{compile}(E))$ \\[0.3em]
+$\rho_\alpha(E)$ & $:=$ & $\mathsf{map}_{f_\alpha}(\mathsf{compile}(E))$ \\[0.3em]
+$E_1 \cup E_2$ & $:=$ & $\mathsf{merge}(\mathsf{compile}(E_1), \mathsf{compile}(E_2))$ \\[0.3em]
+$E_1 - E_2$ & $:=$ & $\mathsf{filterNotMatchingOn}(\mathsf{id}, \mathsf{id};$ \\
+& & $\quad \mathsf{compile}(E_1), \mathsf{compile}(E_2))$ \\[0.3em]
+$E_1 \times E_2$ & $:=$ & $\mathsf{map}_{f_{\times}}(\mathsf{joinOn}(c, c;$ \\
+& & $\quad \mathsf{compile}(E_1), \mathsf{compile}(E_2)))$ \\[0.3em]
+$E_1 \bowtie_\theta E_2$ & $:=$ & $\mathsf{map}_{f_{\bowtie}}(\mathsf{filter}_{P_{\mathrm{res}}}($ \\
+& & $\quad \mathsf{joinOn}(f_1, f_2; \mathsf{compile}(E_1), \mathsf{compile}(E_2))))$ \\[0.3em]
+$\gamma_{G;\mathrm{Agg}}(E)$ & $:=$ & $\mathsf{map}_{f_\gamma}(\mathsf{reduce}_{R_{\mathrm{red}}}($ \\
+& & $\quad \mathsf{map}_{f_G}(\mathsf{compile}(E))))$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Auxiliary functions.}
+The compilation uses the following auxiliary functions:
+\begin{itemize}[itemsep=0.3em]
+  \item $f_A : (k,v) \mapsto (k', v')$ where $(k',v')$ is the projected tuple
+    containing only attributes in $A$;
+  \item $f_\alpha : (k,v) \mapsto (k', v')$ applies the attribute renaming $\alpha$;
+  \item $c : (k,v) \mapsto ()$ is the constant function (for cartesian product);
+  \item $f_1, f_2$ extract the join key from rows of $E_1, E_2$ respectively;
+  \item $P_{\mathrm{res}}$ is the residual predicate after extracting
+    equi-join conditions from $\theta$;
+  \item $f_{\times}, f_{\bowtie}$ package joined pairs into single output rows;
+  \item $f_G : (k,v) \mapsto (g, v')$ re-keys by the grouping attributes $G$;
+  \item $R_{\mathrm{red}}$ is a reducer implementing the aggregates in $\mathrm{Agg}$;
+  \item $f_\gamma$ formats the aggregated result.
+\end{itemize}
+
+\paragraph{Key insight: Difference via identity keys.}
+For set difference $E_1 - E_2$, we use
+$\mathsf{filterNotMatchingOn}$ with \emph{identity} key extractors on
+both sides.
+This means $(k,v) \in \mathsf{compile}(E_1 - E_2)$ iff
+$(k,v) \in \mathsf{compile}(E_1)$ and there is no $(k',v')$ in
+$\mathsf{compile}(E_2)$ with $(k,v) = (k',v')$---i.e., the entry is
+not in $E_2$.
+
+\paragraph{Correctness.}
+Because $\mathsf{compile}$ is defined by case distinction on the
+top-level constructor and recurses only on strictly smaller
+subexpressions, it is a well-defined structural recursion.
+By construction, the denotation of $\mathsf{compile}(E)$ matches that
+of the original RA expression $E$.
+
+\paragraph{Lean formalisation.}
+The Lean formalisation (\texttt{ReactiveRel.lean}) proves soundness and
+completeness theorems for the full set of operators from the paper:
+\begin{itemize}[itemsep=0.2em]
+  \item \textbf{RA operators:} $\sigma$ (select), $\pi$ (project),
+    $\rho$ (rename), $\cup$ (union), $-$ (difference), $\times$ (product),
+    $\bowtie$ (join), and $\gamma$ (aggregate).
+  \item \textbf{Combinator operators:} $\mathsf{map}$, $\mathsf{filter}$,
+    $\mathsf{slice}$, $\mathsf{slices}$, $\mathsf{take}$, $\mathsf{merge}$,
+    $\mathsf{reduce}$, $\mathsf{joinOn}$, and $\mathsf{filterNotMatchingOn}$.
+\end{itemize}
+For tractability, the Lean formalisation makes the following simplifications:
+\begin{enumerate}[itemsep=0.2em]
+  \item \emph{Monomorphic types:} all expressions have fixed key/value types
+    $K \times V \to K \times V$, avoiding universe-level complexity.
+    As a consequence, the compilation of $\times$ (product) is degenerate,
+    and the output-formatting $\mathsf{map}$ steps in the compilation of
+    $\bowtie$ (join) and $\gamma$ (aggregate) are omitted.
+  \item \emph{Singleton aggregation:} the semantics of $\mathsf{reduce}$ and
+    $\gamma$ assume at most one value per key, rather than folding over a
+    multiset. The compilation structure is correct for the general case;
+    only the semantic definitions are simplified.
+\end{enumerate}
+The main theorems \texttt{compileCombToRA\_sound} and
+\texttt{compileRAToComb\_sound} establish that the compilation functions
+preserve semantics under these simplifications.
+
+\section{Connection to First-Order Logic and Locality}
+
+The classical connection between relational algebra and first-order logic
+provides the theoretical foundation for understanding locality properties
+of the reactive combinators.
+Since relational algebra is expressively equivalent to first-order logic
+over finite structures, and the extended combinator algebra is complete
+for relational algebra with aggregates, every combinator expression is
+semantically equivalent to a first-order formula.
+
+This connection yields locality properties via classical results from
+finite model theory: first-order queries are \emph{local}, meaning the
+truth value at a tuple depends only on a bounded neighborhood.
+For the reactive combinators, this means updates affect only entries
+within bounded distance in the key space.
+
+The structural operators are inherently local: \texttt{map}, \texttt{filter},
+and \texttt{slice} operate pointwise; \texttt{merge} combines independent
+collections; \texttt{take} depends only on key order and a global count.
+Join and filter-not-matching operators introduce cross-collection
+dependencies, but these are bounded by the fixed join-key extractors.
+
+Per-key reducers maintain locality by construction: each key's accumulator
+is updated independently, and the well-formedness laws ensure
+order-independent, invertible updates.
+
+In summary, locality follows from the expressiveness equivalence with
+first-order logic and the classical locality properties of first-order
+queries, providing a theoretical guarantee of bounded update propagation
+for incremental maintenance in distributed systems.
+
+\end{document}

@@ -1,7 +1,7 @@
 name = "lean-formalisation"
 version = "0.1.0"
 keywords = ["math"]
-defaultTargets = ["Reduce", "DCE", "IncrementalFixpoint"]
+defaultTargets = ["Reduce", "DCE", "IncrementalFixpoint", "ReactiveRel"]
 
 [leanOptions]
 pp.unicode.fun = true # pretty-prints `fun a ↦ b`
@@ -21,3 +21,6 @@ name = "DCE"
 
 [[lean_lib]]
 name = "IncrementalFixpoint"
+
+[[lean_lib]]
+name = "ReactiveRel"

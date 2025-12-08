@@ -12,3 +12,4 @@ lib/
 *.aux
 *.log
 *.toc
+*.out
