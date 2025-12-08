@@ -1,9 +1,32 @@
 # Towards a Reactive Calculus
 
-This note sketches a possible “reactive calculus” that could sit underneath Skip’s combinators for building reactive views.
-Reducers are the most algebraically subtle part of this story, so they get most of the attention here, but the intent is not to express everything as a reducer—only to make the complex pieces *good by construction* rather than something users or authors must prove case‑by‑case.
+This note sketches a "reactive calculus" for building reactive views, organized into two complementary fragments:
 
-It is intentionally informal and future‑looking; the goal is to capture design directions, not to fix a concrete formal system yet.
+1. **Local calculus**: Skip's key‑local combinators (`map`, `reduce`, `slice`, etc.) with per‑key caching.
+   Expressively equivalent to relational algebra with aggregates (see `skip_local_reactive_expressivity.tex`).
+
+2. **Global calculus**: Fixpoint combinators for transitive/recursive computations (reachability, etc.).
+   Beyond first‑order expressiveness; requires a different execution model (see `incremental_fixpoint_notes.tex`).
+
+The two calculi compose: local combinators prepare data for global computation; global results feed back into local combinators.
+This two‑layer architecture is demonstrated in the DCE case study (see `dce_reactive_view.tex` and `examples/DCEExample.res`).
+
+Reducers are the most algebraically subtle part of the local calculus, so they get detailed attention (Sections 4–6).
+Section 9 covers the fixpoint combinator and how the two calculi interact.
+
+The goal is to make complex pieces *good by construction* rather than something users must prove case‑by‑case.
+
+**Related documents in this repository**:
+
+| Topic | Document |
+|-------|----------|
+| Local calculus expressiveness | `skip_local_reactive_expressivity.tex` |
+| Fixpoint theory and algorithms | `incremental_fixpoint_notes.tex` |
+| DCE two‑layer architecture | `dce_reactive_view.tex` |
+| Example catalogue (48 examples) | `examples_all.tex`, `EXAMPLES_PRIMITIVES_ANALYSIS.md` |
+| Fixpoint implementation | `bindings/Fixpoint.res`, `bindings/SkipruntimeFixpoint.res` |
+| DCE example code | `examples/DCEExample.res` |
+| Lean formalization | `lean-formalisation/` |
 
 ## 1. Core vision
 
@@ -125,40 +148,90 @@ The key pragmatic principle:
 
 The more delicate algebraic laws (well‑formedness, complexity) are introduced in later sections.
 
-### 3.3 Lazy and external compute nodes
+### 3.3 Local vs global computation
 
-Some views are not naturally expressed as a single per‑key reducer, even with enriched state:
+Skip's combinators (`map`, `reduce`, `slice`, etc.) share a fundamental property: they are **key‑local**.
+Output at key `k` depends only on input at some bounded set of keys.
+This enables Skip's execution model:
 
-- they may depend on global structure (graphs, fixpoints, cross‑key relationships), or
-- they may be sourced from or delegated to external systems.
+- **Per‑key caching**: each key's output is cached separately.
+- **Per‑key comparison**: when input changes at key `k`, recompute output for affected keys, compare new vs old per key, propagate only keys that changed.
+- **Bounded update cost**: changes to one key trigger recomputation only for keys with dependencies on it.
 
-The bindings reflect this via:
+This key‑locality corresponds precisely to first‑order definability (see `skip_local_reactive_expressivity.tex`), which is why Skip's combinators are expressively equivalent to relational algebra with aggregates.
 
-- `LazyCollection` / `LazyCompute`: on‑demand views computed by a function `compute : (LazyCollection K V, key, context, params) → array V`, and
+However, some computations are inherently **global**:
+
+- **Transitive closure / reachability**: whether node `y` is reachable from roots depends on arbitrarily long paths through the graph—not expressible in first‑order logic.
+- **Fixpoints**: the result is defined as the least solution to a recursive equation `S = F(S)`.
+- **Graph algorithms**: connected components, shortest paths, etc.
+
+These global computations do not fit Skip's key‑local model:
+
+| Property | Local (Skip) | Global (Fixpoint) |
+|----------|--------------|-------------------|
+| Dependencies | Bounded per key | Unbounded transitive chains |
+| Caching | Per‑key | Single mutable set |
+| Comparison | Per‑key hash/equality | Implicit via delta tracking |
+| Expressiveness | First‑order / RA | Beyond first‑order |
+
+The calculus must therefore distinguish two fragments:
+
+- the **local fragment** (Skip's combinators), where key‑locality and per‑key caching are enforced, and
+- the **global fragment** (fixpoint operators), which requires a different execution model.
+
+### 3.4 Global computation: the fixpoint combinator
+
+For global computations like reachability, we provide a **fixpoint combinator** that operates outside Skip's per‑key caching model but composes with it at the boundaries.
+
+The fixpoint combinator maintains the least fixpoint of a monotone operator:
+
+```
+F(S) = base ∪ step(S)
+```
+
+where `step(S) = ⋃{stepFwd(x) | x ∈ S}`.
+
+**Execution model** (differs from Skip):
+
+- **Mutable state**: the fixpoint maintains a single mutable `Set` of elements, not a per‑key cache.
+- **Delta propagation**: updates are expressed as `{added: [...], removed: [...]}` deltas.
+- **No per‑key hashing**: comparison is implicit via delta tracking, not by hashing the whole set.
+
+**Incremental algorithms** (see `incremental_fixpoint_notes.tex` for details):
+
+- **Expansion** (adding edges/roots): BFS propagation from the new elements. Cost: `O(|new| + |edges from new|)`.
+- **Contraction** (removing edges/roots): well‑founded cascade using BFS ranks, followed by re‑derivation for elements reachable via alternative paths. Cost: `O(|affected| + |edges to affected|)`.
+
+**Implementation**: `bindings/Fixpoint.res` provides the low‑level algorithm; `bindings/SkipruntimeFixpoint.res` provides a managed API that owns the step relation.
+
+**Formal verification**: correctness of both expansion and contraction is proved in Lean (`lean-formalisation/IncrementalFixpoint.lean`).
+
+### 3.5 Lazy and external compute nodes
+
+Beyond the local and fixpoint fragments, some views are best modelled as general *compute nodes*:
+
+- `LazyCollection` / `LazyCompute`: on‑demand views computed by a function `compute : (LazyCollection K V, key, context, params) → array V`.
 - `Context.useExternalResource`: eager collections backed by external services or APIs.
 
-In the reactive calculus, these are best modelled as *compute nodes* in the graph rather than as reducers:
+These consume one or more collections and produce a new collection, specified by a semantic contract rather than reducer or fixpoint laws.
 
-- they consume one or more collections and produce a new collection,
-- they are specified by a semantic contract (“this node computes X from its inputs”) rather than reducer laws,
-- they may internally run iterative or graph algorithms (as in the DCE case study).
-
-The calculus distinguishes:
-
-- the **reducer fragment**, where well‑formedness and incremental complexity are controlled algebraically, from
-- the **compute fragment** for nodes specified relationally or operationally but not necessarily as invertible reducers.
-
-### 3.4 “Simplest tool that works” hierarchy
+### 3.6 "Simplest tool that works" hierarchy
 
 Putting these pieces together suggests a pragmatic hierarchy for building reactive views:
 
 1. **Structural operators on collections** (`map`, `slice`, `slices`, `take`, `merge`, key/value remapping).
 2. **Standard per‑key reducers** (sum, count, min/max, simple enriched accumulators).
 3. **Custom/enriched reducers** when the accumulator needs more structure for incremental performance or invertibility.
-4. **Compute nodes and external resources** (lazy computes, graph algorithms, remote services) when the logic is global or not reducer‑like.
+4. **Fixpoint combinators** (reachability, transitive closure) when the computation is global and recursive.
+5. **Compute nodes and external resources** (lazy computes, remote services) when none of the above apply.
 
-The rest of the note focuses on (2) and (3), developing an algebra and type system for reducers, but should be read in the context of this wider toolkit.
-In practice, most Skip views are built from (1) and (2), reserving (3) and (4) for more complex cases.
+The key architectural insight is that (1)–(3) belong to the **local calculus** (Skip's key‑local model), while (4) belongs to the **global calculus** (fixpoint model).
+These two calculi compose at the boundaries: local combinators can feed into fixpoint combinators, and fixpoint results can feed back into local combinators.
+
+The rest of the note focuses on (2) and (3), developing an algebra and type system for reducers.
+Section 9 discusses (4), the fixpoint combinator, and how it composes with the local calculus.
+In practice, most Skip views are built from (1) and (2), reserving (3)–(5) for more complex cases.
 
 ## 4. Well‑formedness as a typing judgement
 
@@ -243,7 +316,7 @@ The catalogue serves as a stress‑test for the calculus design:
   - base collections and indices are maintained by well‑formed reducers, and
   - global algorithms are expressed as separate reactive nodes that consume these collections rather than as single monolithic reducers.
 
-Most examples stay in the structural + standard‑reducer fragment (hierarchy from Section 3.4), with only a minority needing custom reducers or general compute nodes.
+Most examples stay in the structural + standard‑reducer fragment (hierarchy from Section 3.6), with only a minority needing custom reducers or general compute nodes.
 
 The hypothesis is that:
 
@@ -271,24 +344,26 @@ In both cases, the long‑term goal is that:
 - The runtime’s correctness theorem applies automatically to anything expressible in the calculus (or in the DSL compiled to it).
 - Only a small, clearly marked “escape hatch” is needed for ad‑hoc reducers that fall outside the calculus, and those carry explicit “partial / may recompute” semantics.
 
-## 9. Case study: reactive DCE and graph views
+## 9. Case study: reactive DCE
 
-The LaTeX note `dce_reactive_view.tex` and Lean artefacts (`lean-formalisation/Reduce.lean`, `lean-formalisation/DCE.lean`) provide a worked example: online dead‑code elimination over a distributed program graph.
+The reactive DCE example demonstrates how the local and global calculi compose in practice.
 
-The design there is intentionally two‑layered:
+### 9.1 Two‑layer architecture
 
-- **Layer 1: graph aggregation as an invertible reducer.**
-  - Each file contributes a fragment `(nodes, roots, edges)`; fragments live in a multiset.
-  - A reducer over fragments maintains global multisets of nodes, roots, and edges:
-    `G ⊕ f` adds the fragment componentwise; `G ⊖ f` subtracts it.
-  - Using multisets makes `⊕`/`⊖` pairwise‑commutative and ensures `(G ⊕ f) ⊖ f = G`.
-    This instantiates a `WFReducer` (Section 4) whose well‑formedness is proved in `reduce.tex` and the Lean files.
+DCE uses the two‑layer pattern from Section 3.6:
 
-- **Layer 2: incremental liveness as a graph algorithm.**
-  - Given the aggregated graph `G`, the view partitions nodes into live vs. dead.
-  - An incremental algorithm maintains:
-    - a live set, and
-    - per‑node refcounts for incoming edges from live predecessors.
-  - It updates on each graph delta by BFS‑style propagation and "cascade‑death" when refcounts hit zero.
-  - This logic is *not* an invertible reducer: it relies on full graph state and involves fixpoint‑like propagation.
-    Its state is specified relationally (reachability from roots) and proved delta‑bounded in Lean.
+- **Layer 1 (local)**: A `WFReducer` aggregates file fragments into a global graph `(nodes, roots, edges)` using multiset operations.
+- **Layer 2 (global)**: The fixpoint combinator (Section 3.4) computes the live set as `lfp(F)` where `F(S) = roots ∪ successors(S)`.
+
+See `dce_reactive_view.tex` for the design and `examples/DCEExample.res` for working code.
+
+### 9.2 Towards a global calculus
+
+The fixpoint combinator is currently a single, specialized operator.
+A richer **global calculus** might include:
+
+- **Stratified fixpoints**: multiple fixpoints with negation, processed in layers.
+- **Aggregated fixpoints**: fixpoints with aggregation (e.g., shortest paths, not just reachability).
+- **DSL for fixpoint definitions**: express `F` in a structured language from which incremental operations are derived automatically.
+
+See `incremental_fixpoint_notes.tex` Section 6 for discussion of a potential DSL.
