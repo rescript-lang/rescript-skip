@@ -23,7 +23,7 @@ The goal is to make complex pieces *good by construction* rather than something 
 | Local calculus expressiveness | `skip_local_reactive_expressivity.tex` |
 | Fixpoint theory and algorithms | `incremental_fixpoint_notes.tex` |
 | DCE two‑layer architecture | `dce_reactive_view.tex` |
-| Example catalogue (48 examples) | `examples_all.tex`, `EXAMPLES_PRIMITIVES_ANALYSIS.md` |
+| Example catalogue (core examples plus anti-join patterns) | `examples_all.tex`, `EXAMPLES_PRIMITIVES_ANALYSIS.md` |
 | Fixpoint implementation | `bindings/Fixpoint.res`, `bindings/SkipruntimeFixpoint.res` |
 | DCE example code | `examples/DCEExample.res` |
 | Lean formalization | `lean-formalisation/` |
@@ -317,6 +317,9 @@ The catalogue serves as a stress‑test for the calculus design:
   - global algorithms are expressed as separate reactive nodes that consume these collections rather than as single monolithic reducers.
 
 Most examples stay in the structural + standard‑reducer fragment (hierarchy from Section 3.6), with only a minority needing custom reducers or general compute nodes.
+
+Anti‑join and set‑difference patterns (e.g. unacknowledged alerts, orphan detection) documented in `research/deep_research_results_6_antijoin_patterns.md` and reflected in the example catalogue sit just outside this fragment: they require filtering based on the *absence* of matching keys in another collection.
+A future extension of the calculus could make such patterns first‑class via a monotone `antiJoin` / `setDifference` operator at the structural level, with explicit semantics for incremental maintenance and interaction with reducers.
 
 The hypothesis is that:
 

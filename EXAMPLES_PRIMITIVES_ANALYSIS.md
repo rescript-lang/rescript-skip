@@ -18,14 +18,14 @@ The following examples have detailed analysis with multiple solution approaches,
 | [5.4 Resettable accumulator](#example-54-frp-style-resettable-accumulator) | Reset semantics | Epoch-based keys transform reset into standard aggregation |
 | [6.3 Acyclic joins](#example-63-dynamic-acyclic-join-yannakakis) | Multi-way joins | Map with context lookups—Skip handles delta propagation |
 | [6.4 Counting/DRed views](#example-64-counting-and-dred-style-materialized-views) | Recursive queries | Sum reducer for non-recursive; fixpoint for recursive |
-| [6.7 Fixpoint algorithms](#example-67-iterative-graph-algorithms-with-fixpoints) | Graph algorithms | Requires iteration—need new `fixpoint` primitive |
+| [6.9 Fixpoint algorithms](#example-69-iterative-graph-algorithms-with-fixpoints) | Graph algorithms | Requires iteration—need new `fixpoint` primitive |
 
 ### Related: Reactive DCE Case Study
 
 The document `dce_reactive_view.tex` provides a fully worked example of **reactive dead-code elimination** that demonstrates the two-layer architecture in practice:
 
 - **Layer 1 (aggregation)**: File fragments `(nodes, roots, edges)` are combined via multiset union—a well-formed reducer (Examples 6.4/6.6 pattern).
-- **Layer 2 (graph algorithm)**: Incremental liveness via refcounts + BFS/cascade propagation—a compute node, not a reducer (Examples 6.4 recursive / 6.7 pattern).
+- **Layer 2 (graph algorithm)**: Incremental liveness via refcounts + BFS/cascade propagation—a compute node, not a reducer (Examples 6.4 recursive / 6.9 pattern).
 
 The Lean formalization (`lean-formalisation/DCE.lean`) proves well-formedness for Layer 1 and delta-boundedness for Layer 2. Section 7 of that document explicitly analyzes why Layer 2 *cannot* be packaged as an invertible reducer—reaching the same conclusion as Examples 6.4 and 6.7 in this analysis.
 
@@ -51,10 +51,12 @@ From the bindings (`SkipruntimeCore.res`):
 ## Classification Legend
 
 - **🟢 Structural only**: No reducer needed; uses only `map`, `slice`, `take`, `merge`
+- **🔵 Anti-join**: Requires `filterNotMatchingOn` combinator (filtering based on absence of keys in another collection)
 - **🟡 Standard reducer**: Needs a reducer, but a simple/standard one (count, sum, min, max)
 - **🟠 Enriched reducer**: Needs a reducer with enriched state `(sum, count)`, `(min, secondMin, countMin)`, etc.
 - **🔴 Partial/recompute**: Reducer that may need to recompute on remove (e.g., set membership, top-K eviction)
-- **🟣 Compute node**: Needs lazy compute, fixpoint, or external—not a reducer pattern
+- **🟣 Fixpoint**: Requires `fixpoint` primitive for iteration/recursion (graph algorithms, transitive closure)
+- **⚫ External**: Fundamentally sequential/non-commutative; requires external state machine (undo/redo)
 
 ---
 
@@ -1048,7 +1050,7 @@ When a clear event arrives, the accumulator resets. This could be modeled as a s
 ## Section 5: History and Ordered-State Patterns
 
 ### Example 5.1: Elm-style undo/redo history
-**Classification: 🟣 Compute node (not reducer) — Fundamentally non-commutative**
+**Classification: ⚫ External (not reducer) — Fundamentally non-commutative**
 
 ```
 Input:  commands : Unit × Command  // Command = Action(a) | Undo | Redo
@@ -1242,14 +1244,14 @@ let historyCompute = LazyCompute.make((self, _, ctx, _) => {
 ---
 
 ### Example 5.2: Redux-like time-travel state
-**Classification: 🟣 Compute node**
+**Classification: ⚫ External**
 
 Same as 5.1.
 
 ---
 
 ### Example 5.3: Svelte-style undoable store
-**Classification: 🟣 Compute node**
+**Classification: ⚫ External**
 
 Same pattern.
 
@@ -1605,7 +1607,7 @@ The DBToaster-style approach localizes update propagation by materializing inter
 ---
 
 ### Example 6.4: Counting and DRed-style materialized views
-**Classification: 🟡 Standard reducer (count) for non-recursive; 🟣 Compute node for recursive**
+**Classification: 🟡 Standard reducer (count) for non-recursive; 🟣 Fixpoint for recursive**
 
 ```
 Input:  Base relations (e.g., Edge(src, dst))
@@ -1749,7 +1751,7 @@ let tc = fixpoint(tcStep, tcBase)
 |-----------|----------|----------------|
 | Non-recursive (join, filter, project) | Counting via sum reducer | 🟡 Standard reducer |
 | Linear recursive (single recursive call) | Counting may work with care | 🟠 Enriched |
-| General recursive (transitive closure) | Fixpoint / differential | 🟣 Compute node |
+| General recursive (transitive closure) | Fixpoint / differential | 🟣 Fixpoint |
 
 **For non-recursive views**: Use `map` + `reduce(sum)` — derivation counting is just summation.
 
@@ -1768,7 +1770,56 @@ Each update is weighted (+1/-1). Reducer tracks sum of weights; zero weight → 
 
 ---
 
-### Example 6.6: Incremental graph metrics (degree, rank)
+### Example 6.6: Unacknowledged alerts via streaming anti-join
+**Classification: 🔵 Anti-join**
+
+```
+Input:  Alerts(alertId, userId, severity, payload)
+        Acks(alertId, ackTime)
+Output: Outstanding(alertId → Alert)  // alerts with no ack
+```
+
+This example models a streaming view `Outstanding = Alerts LEFT ANTI JOIN Acks USING (alertId)`, i.e., keep each alert whose `alertId` has no matching row in `Acks`.
+Semantically it is a **set difference** between `Alerts` and the join of `Alerts` with `Acks`; in the expressivity calculus it is captured by the structural combinator `filterNotMatchingOn` (the anti-join operator).
+
+- Insert alert `a`: if no ack for `a.alertId` exists, emit `a` into `Outstanding`.
+- Insert ack for id `x`: remove `Outstanding[x]` if present.
+- Delete ack for id `x`: re-insert `Alerts[x]` into `Outstanding` if the alert still exists.
+
+In current Skip bindings this pattern is **not expressible** as an eager reactive view (only via an external LazyCompute-style query), but it becomes a first-class structural view once the calculus is extended with the anti-join combinator proposed in `skip_local_reactive_expressivity.tex` and supported by the anti-join case study in `research/deep_research_results_6_antijoin_patterns.md`.
+
+---
+
+### Example 6.7: Orphan detection / foreign-key violation monitor
+**Classification: 🔵 Anti-join**
+
+```
+Input:  Parents(parentId, …)
+        Children(childId, parentId, …)
+Output: Orphans(childId → Child)  // children with no parent
+```
+
+This example tracks referential-integrity violations incrementally: children whose `parentId` is missing from `Parents`.
+At the relational level it is the query:
+
+```
+SELECT * FROM Children c
+WHERE NOT EXISTS (SELECT 1 FROM Parents p WHERE p.parentId = c.parentId)
+```
+
+In the reactive calculus this is again a **structural anti-join**:
+`Orphans = filterNotMatchingOn(fChild, fParent; Children, Parents)` where the join key extractors both pick out `parentId`.
+Incremental maintenance follows the standard anti-join pattern:
+
+- Insert child `c`: emit into `Orphans` iff there is currently no parent with `parentId = c.parentId`.
+- Insert parent `p`: remove any orphans whose `parentId = p.parentId`.
+- Delete parent `p`: add all remaining children with `parentId = p.parentId` to `Orphans`.
+
+As with unacknowledged alerts, this example sits just outside the current Skip operator set but is handled cleanly by a structural `filterNotMatchingOn` / anti-join combinator backed by simple per-key counts and indices.
+
+---
+
+### Example 6.8: Incremental graph metrics (degree, rank)
 **Classification: 🟡 Standard reducer**
 
 Degree: count reducer
@@ -1776,8 +1827,8 @@ Rank contributions: sum reducer
 
 ---
 
-### Example 6.7: Iterative graph algorithms with fixpoints
-**Classification: 🟣 Compute node (requires iteration) — Fundamentally not a reducer**
+### Example 6.9: Iterative graph algorithms with fixpoints
+**Classification: 🟣 Fixpoint (requires iteration)**
 
 ```
 Input:  edges : EdgeId × (src: NodeId, dst: NodeId, weight?: float)
@@ -2037,16 +2088,16 @@ Funnel ratios: map over the per-stage counts to compute division.
 
 ## Summary Table (Revised After Detailed Analysis)
 
-| Category | Examples | 🟢 Structural | 🟡 Standard | 🟠 Enriched | 🔴 Partial | 🟣 Compute |
-|----------|----------|---------------|-------------|-------------|------------|------------|
-| **1. Simple Per-Key** | 13 | 0 | 10 | 0 | 2 (min/max) | 0 |
-| **2. Enriched-State** | 9 | 1 (top-K)† | 1 | 5 | 2 | 0 |
-| **3. Set/Index** | 4 | 2 | 0 | 2 | 0 | 0 |
-| **4. Windowed/Session** | 7 | 1 (count-based)† | 5 | 0 | 1 | 0 |
-| **5. History/Undo** | 4 | 0 | 2 (epoch-based)† | 0 | 0 | 2 |
-| **6. Graph/Relational** | 7 | 1 (joins)† | 4 | 0 | 0 | 2 |
-| **7. Business/UI** | 4 | 0 | 3 | 1 | 0 | 0 |
-| **TOTAL** | 48 | **5** | **25** | **8** | **5** | **4** |
+| Category | Examples | 🟢 Structural | 🔵 Anti-join | 🟡 Standard | 🟠 Enriched | 🔴 Partial | 🟣 Fixpoint | ⚫ External |
+|----------|----------|---------------|--------------|-------------|-------------|------------|-------------|-------------|
+| **1. Simple Per-Key** | 13 | 0 | 0 | 10 | 0 | 2 (min/max) | 0 | 0 |
+| **2. Enriched-State** | 9 | 1 (top-K)† | 0 | 1 | 5 | 2 | 0 | 0 |
+| **3. Set/Index** | 4 | 2 | 0 | 0 | 2 | 0 | 0 | 0 |
+| **4. Windowed/Session** | 7 | 1 (count-based)† | 0 | 5 | 0 | 1 | 0 | 0 |
+| **5. History/Undo** | 4 | 0 | 0 | 2 (epoch-based)† | 0 | 0 | 0 | 2 |
+| **6. Graph/Relational** | 9 | 1 (joins)† | 2 | 4 | 0 | 0 | 2 | 0 |
+| **7. Business/UI** | 4 | 0 | 0 | 3 | 1 | 0 | 0 | 0 |
+| **TOTAL** | 50 | **5** | **2** | **25** | **8** | **5** | **2** | **2** |
 
 † = reclassified after detailed analysis (simpler solution found)
 
@@ -2061,8 +2112,8 @@ After detailed analysis, several examples originally classified as complex turne
 | Example | Original | Revised | Key Insight |
 |---------|----------|---------|-------------|
 | Top-K | 🔴 Partial | 🟢 Structural | Use key ordering, no reducer needed |
-| Acyclic joins | 🟣 Compute | 🟢 Structural | `map` with context lookups |
-| Resettable accumulator | 🟣 Compute | 🟡 Standard | Epoch-based keys |
+| Acyclic joins | 🟣 Fixpoint | 🟢 Structural | `map` with context lookups |
+| Resettable accumulator | ⚫ External | 🟡 Standard | Epoch-based keys |
 | Sliding window avg | 🔴 Partial | 🟡 Standard | External eviction (Skip idiom) |
 
 **Pattern**: Before reaching for complex primitives, check if the problem can be transformed into a simpler one.
@@ -2084,6 +2135,14 @@ After detailed analysis, several examples originally classified as complex turne
 
 **Key insight**: Skip's key ordering (`≤₍json₎`) and multi-valued collections provide powerful query capabilities without reducers.
 
+### 3a. Anti-join patterns require a new combinator
+
+**2 examples (~4%)** require **anti-join** (`filterNotMatchingOn`):
+- Unacknowledged alerts (alerts with no matching ack)
+- Orphan detection (children with no matching parent)
+
+These patterns filter one collection based on **absence of keys** in another—a capability Skip currently lacks. Adding `filterNotMatchingOn` would make the calculus expressively equivalent to relational algebra.
+
 ### 4. Enriched reducers follow clear patterns
 
 The **~17%** of examples needing enriched state cluster around a few patterns:
@@ -2093,15 +2152,25 @@ The **~17%** of examples needing enriched state cluster around a few patterns:
 
 **Pattern**: The calculus should provide combinators to build these from primitives.
 
-### 5. True compute nodes are rare but necessary
+### 5. Fixpoint patterns require a new primitive
 
-Only **~8%** of examples genuinely require compute nodes:
-- **Undo/redo history**: Sequential, non-commutative
-- **Recursive queries**: Transitive closure, fixpoint algorithms
+**2 examples (~4%)** require **fixpoint** (`fixpoint` primitive):
+- Recursive queries (transitive closure, DRed)
+- Iterative graph algorithms (SSSP, PageRank)
 
-These share a characteristic: **they cannot be expressed as commutative folds**.
+These require **iteration over the same data** until convergence—fundamentally different from a fold.
 
-**Pattern**: The calculus needs a `fixpoint` primitive for recursive queries, but undo/redo may be best handled outside the reactive system.
+**Pattern**: The calculus needs a `fixpoint` primitive for recursive/iterative computations.
+
+### 5a. External state for fundamentally sequential operations
+
+**2 examples (~4%)** require **external state machines**:
+- Undo/redo history (order-dependent commands)
+- Time-travel state (Redux-style)
+
+These are **fundamentally non-commutative**: the order of operations matters, which violates reducer semantics.
+
+**Pattern**: Keep sequential logic outside Skip; use Skip only for derived views of the current state.
 
 ### 6. The Skip idiom: external processes for temporal concerns
 
@@ -2128,6 +2197,10 @@ slices   : Collection K V → [(K, K)] → Collection K V
 take     : Collection K V → int → Collection K V
 merge    : [Collection K V] → Collection K V
 
+// Anti-join (required for RA completeness)
+filterNotMatchingOn : (K₁ × V₁ → J) → (K₂ × V₂ → J) → Collection K₁ V₁ → Collection K₂ V₂ → Collection K₁ V₁
+// Keep entries from first collection whose join key has no match in second collection
+
 // Derived operations (can be built from above)
 filter   : Collection K V → (K × V → bool) → Collection K V        // map that conditionally emits
 rekey    : Collection K V → (K × V → K') → Collection K' V          // map that changes key
@@ -2139,6 +2212,7 @@ lookup   : Collection K V → K → Values V                            // conte
 - Top-K → Key by `(group, -score, id)`, use `take`
 - Inverted index → Swap key and value with `rekey`
 - Joins → `map` with `lookup` into other collections
+- Anti-joins → `filterNotMatchingOn` for "unmatched entries" patterns
 
 ### Tier 2: Standard Reducers (built-in, well-formed)
 
@@ -2248,18 +2322,22 @@ join = baseRelation->map((key, value, ctx) => {
 })
 ```
 
-### 5. Reserve compute nodes for true non-commutativity
+### 5. Reserve special primitives for non-reducible patterns
 
-Only use `lazyCompute`/`fixpoint` when:
-- Order matters (undo/redo) — consider external state machine
-- Iteration is required (recursive queries) — use `fixpoint`
-- Per-query computation is complex — use `lazyCompute`
+Only use `fixpoint` when:
+- Iteration is required (recursive queries, graph algorithms)
+
+Only use external state machines when:
+- Order matters (undo/redo) — fundamentally non-commutative
+
+Only use `lazyCompute` when:
+- Per-query computation is complex and doesn't fit the reactive model
 
 ---
 
-## Observation: No Anti-Join Patterns in These Examples
+## Observation: No Anti-Join Patterns in the Core Examples
 
-**None of the 48 examples above require anti-join or set difference.**
+**None of the 48 core examples above require anti-join or set difference.**
 
 Every example uses:
 - Positive matches via map-with-lookup (joins)
@@ -2289,9 +2367,10 @@ The research prompts (see `research/deep_research_prompt_*.txt`) focused on **ag
 - FRP/UI state patterns
 
 The prompts did not ask about **relational algebra completeness**.
-The 48 examples reflect this scope—they answer "What aggregation patterns can Skip express?" not "Is Skip relationally complete?"
+The core 48 examples reflect this scope—they answer "What aggregation patterns can Skip express?" not "Is Skip relationally complete?"
 
 Skip's current operators cannot express "keep entries from R₁ whose key does not appear in R₂".
+The anti-join and orphan-detection patterns summarized in `research/deep_research_results_6_antijoin_patterns.md` and exemplified in the LaTeX catalogue (e.g. unacknowledged alerts, foreign-key violation monitors) therefore live just outside the current calculus and motivate future extensions.
 
 ---
 

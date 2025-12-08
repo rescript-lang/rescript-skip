@@ -42,6 +42,22 @@ Each operator (e.g.\ join, map, reduce) specifies how to transform input weights
 The service’s update procedure simply applies incoming weighted updates and recomputes affected downstream weights, removing any records whose cumulative weight becomes zero.
 \end{example}
 
+\begin{example}[Unacknowledged alerts as a streaming anti-join]
+Base collections \texttt{Alerts(alertId, userId, severity, payload)} and \texttt{Acks(alertId, ackTime)} model alert events and acknowledgments.
+Define a derived view \texttt{Outstanding(alertId $\to$ Alert)} containing exactly those alerts that have not yet been acknowledged, corresponding to the relational query \texttt{Alerts LEFT ANTI JOIN Acks USING (alertId)} or \texttt{SELECT * FROM Alerts a WHERE NOT EXISTS (SELECT 1 FROM Acks k WHERE k.alertId = a.alertId)}.
+On insertion of an alert with id \texttt{a}, if no acknowledgment exists for \texttt{a}, the service inserts \texttt{Alerts[a]} into \texttt{Outstanding}; on deletion of an alert, it removes \texttt{Outstanding[a]} if present.
+On insertion of an acknowledgment for \texttt{a}, it removes \texttt{Outstanding[a]} (if the corresponding alert still exists); if acknowledgments themselves can be deleted, removing an ack for \texttt{a} causes the service to re-insert \texttt{Alerts[a]} into \texttt{Outstanding}.
+This captures a common “unmatched entries” pattern in streaming systems, where the view is maintained as a continuously updated anti-join between a base relation of open items and a relation of completion events.
+\end{example}
+
+\begin{example}[Foreign-key violation and orphan detection via set difference]
+Consider base collections \texttt{Parents(parentId, \dots)} and \texttt{Children(childId, parentId, \dots)} representing a referential-integrity relationship.
+Define a derived view \texttt{Orphans(childId $\to$ Child)} whose keys are exactly those children whose \texttt{parentId} is not present in \texttt{Parents}, corresponding to the set difference \texttt{Children $\setminus$ (Children \text{ JOIN } Parents)} or the query \texttt{SELECT * FROM Children c WHERE NOT EXISTS (SELECT 1 FROM Parents p WHERE p.parentId = c.parentId)}.
+On insertion of a child \texttt{c}, if no matching parent exists, the service inserts \texttt{c} into \texttt{Orphans}; on insertion of a parent \texttt{p}, it scans children with \texttt{parentId = p.parentId} and removes them from \texttt{Orphans}.
+Similarly, deleting a parent \texttt{p} adds all remaining children with \texttt{parentId = p.parentId} to \texttt{Orphans}, while deleting a child removes it from \texttt{Orphans} if present.
+This specifies a streaming foreign-key-violation monitor as a maintained set difference between base collections, a pattern commonly supported via anti-join or \texttt{NOT EXISTS} in incremental view-maintenance systems.
+\end{example}
+
 \begin{example}[Incremental graph metrics service (Ingress, GraphBolt-style)]
 Input collection \texttt{Edges : (src : NodeId, dst : NodeId)} and optionally per-node attributes.
 The service maintains per-node views such as:

@@ -1,0 +1,53 @@
+You are a deep research assistant.
+Goal: collect realistic anti-join, set-difference, and "unmatched entries" patterns from reactive and streaming systems, to identify use cases that require filtering based on absence.
+
+Background: We have catalogued 48 reactive service examples (aggregations, joins, windows, graph queries) but found zero examples requiring anti-joins. We hypothesize this is a gap in the research scope, not in real-world needs. This prompt aims to fill that gap.
+
+1. Focus on:
+   - Apache Flink (SQL NOT IN, NOT EXISTS, EXCEPT, temporal anti-joins),
+   - Kafka Streams (KTable-KTable joins with tombstones, foreign-key joins with no match),
+   - Materialize (streaming SQL with EXCEPT, NOT EXISTS, LEFT JOIN WHERE NULL),
+   - Apache Spark Structured Streaming (streaming-static anti-joins),
+   - Differential Dataflow / DBSP (negation, set difference),
+   - RisingWave, Pathway, and other streaming databases,
+   - Event-driven architectures and CQRS patterns.
+
+2. For each system, look at official docs, tutorials, case studies, and blog posts showing:
+   - Anti-join patterns: "entries in A with no match in B".
+   - Set difference: A EXCEPT B, A - B.
+   - NOT IN / NOT EXISTS subqueries maintained incrementally.
+   - LEFT OUTER JOIN ... WHERE B.key IS NULL (anti-join via outer join).
+   - Tombstone handling and "key disappeared" events.
+   - Fraud detection, data quality, orphan detection, stale-record cleanup.
+
+3. For each distinct example pattern, record:
+   - System plus link to the example (doc page, blog post, GitHub issue).
+   - Informal description: what business problem does it solve?
+   - The query or code pattern used (SQL, DSL, or API call).
+   - How the system handles incremental updates when:
+     (a) a new entry appears in A with no match in B,
+     (b) an entry disappears from B, making A entries "unmatched",
+     (c) an entry appears in B, removing A entries from the anti-join result.
+   - Whether the pattern is explicitly supported or requires workarounds.
+
+4. Specific use cases to search for:
+   - Orphan detection: orders/transactions with no matching master record.
+   - Unacknowledged alerts: alerts with no entry in acknowledgments table.
+   - Unassigned work items: tickets, tasks, or jobs with no assignment.
+   - Stale inventory: products with no recent sales or activity.
+   - Expired sessions: sessions with no recent heartbeat.
+   - Fraud/anomaly detection: transactions with no matching approval.
+   - Data quality monitoring: foreign-key violations in streaming data.
+   - Unsubscribed users: users who opted out of a feature.
+   - Cache invalidation: entries in cache with no source record.
+
+5. Output:
+   - A grouped list of 15–30 anti-join/set-difference patterns, with:
+     - 1–2 sentence business description,
+     - The system and query/code pattern,
+     - Notes on incremental maintenance approach.
+   - A summary of which systems support anti-joins well vs. require workarounds.
+   - Observations on how common these patterns are in production reactive services.
+   - Any patterns that are particularly challenging to maintain incrementally.
+
+

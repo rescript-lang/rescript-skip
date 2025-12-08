@@ -200,8 +200,8 @@ npm run build && node examples/LiveHarness.res.js
 
 ### Research & Analysis
 - **`skip_local_reactive_expressivity.tex`**: Main paper—proves expressive equivalence between Skip's combinators and relational algebra with aggregates. Identifies `filterNotMatchingOn` as the single missing operator needed for RA completeness.
-- **`EXAMPLES_PRIMITIVES_ANALYSIS.md`**: Detailed analysis of 48 reactive service examples, classifying each by what primitives it needs (structural, reducer, compute node).
-- **`examples_all.tex`** + category files: LaTeX catalogue of the 48 examples organized by pattern (per-key aggregates, windowed views, graph metrics, etc.).
+- **`EXAMPLES_PRIMITIVES_ANALYSIS.md`**: Detailed analysis of 50 reactive service examples (48 core + 2 anti-join patterns), classifying each by what primitives it needs (structural, reducer, compute node).
+- **`examples_all.tex`** + category files: LaTeX catalogue of the 50 examples organized by pattern (per-key aggregates, windowed views, graph metrics, anti-join patterns, etc.).
 - **`dce_reactive_view.tex`**: Case study on reactive dead code elimination.
 - **`incremental_fixpoint_notes.tex`**: Notes on incremental fixpoint computation.
 - **`reduce.tex`**: Notes on reducer semantics and well-formedness.
