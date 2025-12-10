@@ -24,7 +24,7 @@ The Skip runtime provides reactive bindings with structural operators on
 key-value collections: entry-wise maps, key-range slices, prefixes,
 finite merges, and per-key reducers.
 
-We ask: \emph{what is missing from Skip to match the expressivity of
+We ask: \emph{what is the expressivity of Skip relative to
 relational algebra (RA) with aggregates?}
 A catalogue of 50 representative examples---including DBToaster-style
 incremental views, per-group aggregates, and multi-way joins---reveals
@@ -32,18 +32,14 @@ that joins are pervasive.
 Skip supports them via a \emph{map-with-lookup} idiom:
 computing ``active members per group'' or ``revenue by region'' works
 by looking up related entries during a map operation.
-However, \emph{anti-joins} (``entries with no matching partner'') are
-absent from the 48 core examples---not because they are rare, but because
-Skip cannot express them. Two additional anti-join examples (unacknowledged
-alerts, orphan detection) illustrate the gap.
-Useful reactive patterns like orphan detection (orders with no customer),
-unacknowledged-alert dashboards, or unassigned-ticket queues all require
-filtering based on absence of keys, which Skip lacks.
+Notably, \emph{anti-joins} (``entries with no matching partner'') are
+also expressible via map-with-lookup: Skip tracks dependencies on
+\emph{missing} keys, so when a blocking key is added to the right
+collection, dependent entries in the left collection are re-evaluated.
 
-We identify an anti-join combinator, \textsf{filterNotMatchingOn}, as the missing operator,
-describe how to implement it, and prove that adding it achieves
-\emph{expressive equivalence} with RA: the extended combinator algebra
-can express exactly the RA queries (selection, projection, union,
+We formalise this capability with an explicit $\mathsf{filterNotMatchingOn}$
+combinator and prove \emph{expressive equivalence} with RA: the combinator
+algebra can express exactly the RA queries (selection, projection, union,
 difference, product, join, grouping), and vice versa.
 The equivalence is constructive---we give explicit compilation functions
 in both directions.
@@ -72,9 +68,8 @@ Skip supports all of these via a map-with-lookup idiom, where the map
 function receives a context parameter providing read access to other
 collections.
 
-However, \emph{anti-joins} (``entries with no matching partner'') are
-absent from all 48 core examples; two supplementary anti-join examples illustrate
-the missing pattern.
+Interestingly, \emph{anti-joins} (``entries with no matching partner'') are
+absent from all 48 core examples, yet they \emph{are} expressible in Skip.
 Reactive services often need such patterns:
 \begin{itemize}[itemsep=0.2em,topsep=0.3em]
   \item \textbf{Orphan detection}: orders with no matching customer record
@@ -84,14 +79,15 @@ Reactive services often need such patterns:
   \item \textbf{Unassigned tickets}: support tickets with no entry in
     assignments (queue management).
 \end{itemize}
-These cannot be implemented in Skip: there is no set-difference operator,
-no anti-join primitive, and no way to filter one collection based on
-the absence of keys in another.
+These \emph{can} be implemented via map-with-lookup: when a mapper queries
+a key that does not exist in the lookup collection, Skip tracks this as a
+dependency. When that key is later added, the mapper re-runs, correctly
+updating the anti-join output (see Section~\ref{sec:antijoin-expressible}).
 
 \paragraph{Contributions.}
-We identify an anti-join combinator, $\mathsf{filterNotMatchingOn}$, as the single missing operator,
-describe how to implement it in Skip (Section~\ref{sec:comb-fnm}),
-and prove that adding it achieves expressive equivalence with relational
+We formalise the anti-join capability with an explicit $\mathsf{filterNotMatchingOn}$
+combinator (Section~\ref{sec:comb-fnm}),
+and prove that the combinator algebra achieves expressive equivalence with relational
 algebra extended with aggregates.
 Specifically:
 \begin{itemize}[itemsep=0.3em]
@@ -492,29 +488,44 @@ This motivates the $\mathsf{joinOn}$ combinator defined below, which
 formalises the join capability that Skip users already access via
 the map-with-lookup idiom.
 
-\paragraph{Anti-joins appear inexpressible.}
-While joins are expressible via map-with-lookup, \emph{anti-joins}
-(``entries of $R_1$ with no matching key in $R_2$'') do not appear
-to be expressible with Skip's current bindings.
+\paragraph{Anti-joins are expressible via map-with-lookup.}
+\label{sec:antijoin-expressible}
+Unlike what one might initially expect, \emph{anti-joins}
+(``entries of $R_1$ with no matching key in $R_2$'') \emph{are}
+expressible with Skip's map-with-lookup idiom.
 
-Inspecting the Skip API, the \texttt{EagerCollection} type provides:
+The key insight is that Skip tracks dependencies on \emph{missing} keys.
+When a mapper calls \texttt{right.getArray(key)} and receives an empty
+array (because that key does not exist in \texttt{right}), Skip records
+this as a dependency. When \texttt{right} later gains that key, Skip
+re-runs the mapper for the affected entries in \texttt{left}.
+
+\paragraph{Anti-join via map-with-lookup.}
+To compute the anti-join $R_1 \ltimes_{\neg} R_2$ (entries of $R_1$ whose
+key has no match in $R_2$), we write:
+\begin{verbatim}
+  left.map((key, values, ctx) => {
+    const blockers = ctx.right.getArray(key);
+    return blockers.length === 0
+      ? values.map(v => [key, v])
+      : [];
+  }, right)
+\end{verbatim}
+This pattern correctly maintains the anti-join reactively:
 \begin{itemize}[itemsep=0.2em]
-  \item \texttt{map}, \texttt{reduce}, \texttt{mapReduce} --- transformation and aggregation
-  \item \texttt{slice}, \texttt{slices}, \texttt{take} --- filtering by key range or count
-  \item \texttt{merge} --- union of collections
+  \item When \texttt{right} gains key $k$, entries with key $k$ in
+    \texttt{left} are removed from the output.
+  \item When \texttt{right} loses key $k$, entries with key $k$ in
+    \texttt{left} are added back to the output.
 \end{itemize}
-There is no set-difference operator, no anti-join primitive, and no
-way to filter one collection based on the \emph{absence} of keys in another.
-The \texttt{LazyCompute} mechanism could compute an anti-join on demand,
-but produces a lazy collection, not an eager reactive one.
+This was verified empirically (see \texttt{examples/AntiJoinTestHarness.res}).
 
-The 48 core examples contain no ``NOT IN'' style queries,
-consistent with this limitation; two anti-join examples
-(unacknowledged alerts, orphan detection) were added separately to
-demonstrate the gap.
+The 48 core examples contain no ``NOT IN'' style queries, but this
+reflects the rarity of anti-join patterns in the example set, not a
+fundamental limitation of Skip.
 The $\mathsf{filterNotMatchingOn}$ operator defined in
-Section~\ref{sec:comb-fnm} fills this gap with clear, formally
-specified semantics.
+Section~\ref{sec:comb-fnm} provides clear, formally specified semantics
+for this capability.
 
 \subsection{Join on a derived key}
 \label{sec:comb-join}
