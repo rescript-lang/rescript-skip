@@ -1,0 +1,360 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+
+\title{Reactive Reanalyze: DCE with Dis-aggregation and Incremental Fixpoint}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Overview}
+
+This document provides a mathematical representation of the \texttt{reanalyze} dead code elimination algorithm as implemented in a reactive Skip service.
+
+\paragraph{Three-Layer Architecture.} The implementation has three distinct layers with different computational models:
+
+\begin{center}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Layer} & \textbf{Computation Model} & \textbf{What It Does} \\
+\hline
+1. Skip Runtime & Server mapper + SSE & Dis-aggregation, delta streaming \\
+2. Fixpoint Combinator & \texttt{SkipruntimeFixpoint} & Incremental liveness \\
+3. Post-Fixpoint & Pure functions & Optional args, module deadness \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{Key boundary:} Skip combinators are only available in Layers 1--2. Layer 3 uses the fixpoint \emph{result} but runs as ordinary code after each update.
+
+\section{Domain Model}
+
+\subsection{Base Types}
+
+\begin{align*}
+\mathsf{Name} &\quad \text{declaration names (values, types, modules)} \\
+\mathsf{ArgName} &\quad \text{optional argument names (e.g., \texttt{\char`\~format}, \texttt{\char`\~locale})}
+\end{align*}
+
+\subsection{File Data (Server Input)}
+
+Each file $f$ provides complete analysis data:
+\[
+\mathsf{fileData}_f = (\mathsf{decls}_f, \mathsf{refs}_f, \mathsf{annot}_f, \mathsf{optArgCalls}_f)
+\]
+
+where:
+\begin{align*}
+\mathsf{decls}_f &: \mathcal{P}(\mathsf{Name}) && \text{declarations in file } f \\
+\mathsf{refs}_f &: \mathcal{P}(\mathsf{Name} \times \mathsf{Name}) && \text{pairs } (\mathsf{target}, \mathsf{source}) \\
+\mathsf{annot}_f &: \mathsf{Name} \rightharpoonup \{\mathsf{dead}, \mathsf{live}\} && \text{partial: annotated decls only} \\
+\mathsf{optArgCalls}_f &: \mathcal{P}(\mathsf{Name} \times \mathsf{Name} \times \mathcal{P}(\mathsf{ArgName})) && \text{call site info}
+\end{align*}
+
+For $\mathsf{optArgCalls}$, each element $(c, f, A)$ represents:
+\begin{itemize}
+  \item $c \in \mathsf{Name}$: the \textbf{caller} (declaration containing the call)
+  \item $f \in \mathsf{Name}$: the \textbf{callee} (function with optional args)
+  \item $A \subseteq \mathsf{ArgName}$: the \textbf{passed arguments} at this call site
+\end{itemize}
+
+\subsection{Fragments (Server Output)}
+
+The server dis-aggregates each file into keyed fragments:
+\begin{align*}
+(f, \mathsf{"decls"}) &\mapsto \mathsf{decls}_f &
+(f, \mathsf{"refs"}) &\mapsto \mathsf{refs}_f \\
+(f, \mathsf{"annot"}) &\mapsto \mathsf{annot}_f &
+(f, \mathsf{"optArgCalls"}) &\mapsto \mathsf{optArgCalls}_f
+\end{align*}
+
+\section{Layer 1: Skip Runtime (Server + SSE)}
+
+\subsection{Server Mapper}
+
+The server uses a \textbf{mapper} to split file data into fragments:
+\[
+\mathsf{disaggregate} : (f, \mathsf{fileData}_f) \mapsto \{(f, t, v) \mid t \in \mathsf{Types}, v = \mathsf{fileData}_f.t\}
+\]
+
+This produces four output entries per input file.
+
+\subsection{Delta Detection}
+
+When file $f$ is updated, Skip compares each output fragment's new value to its old value. Only changed fragments are sent to clients via SSE.
+
+\textbf{Example:} If only annotations change, only $(f, \mathsf{"annotations"})$ is sent---not decls, refs, or optArgCalls.
+
+\section{Layer 2: Client-Side Combinators}
+
+The client uses two combinators to maintain state incrementally:
+\begin{enumerate}
+  \item \texttt{ClientReducer}: Aggregates data from multiple sources (files)
+  \item \texttt{SkipruntimeFixpoint}: Computes transitive closure (liveness)
+\end{enumerate}
+
+\subsection{ClientReducer: Incremental Aggregation}
+
+A \textbf{ClientReducer} aggregates values from multiple sources while tracking provenance:
+
+\[
+\mathsf{ClientReducer} : (\mathsf{Source} \times V) \to V_{\mathsf{agg}}
+\]
+
+\textbf{Key operations:}
+\begin{itemize}
+  \item $\mathsf{setContribution}(s, vs)$: Set source $s$'s contribution to $vs$, returns delta
+  \item $\mathsf{current}()$: Get current aggregated value
+\end{itemize}
+
+\textbf{Semantics:} When source $s$'s contribution changes from $\mathsf{old}_s$ to $\mathsf{new}_s$:
+\begin{align*}
+\Delta^+ &= \mathsf{new}_s \setminus \mathsf{old}_s && \text{(added by this source)} \\
+\Delta^- &= \mathsf{old}_s \setminus \mathsf{new}_s && \text{(removed by this source)}
+\end{align*}
+
+For multiset semantics (where the same value can come from multiple sources):
+\begin{align*}
+\mathsf{addedToAggregate} &= \{v \in \Delta^+ \mid \mathsf{count}(v) = 0 \to 1\} \\
+\mathsf{removedFromAggregate} &= \{v \in \Delta^- \mid \mathsf{count}(v) = 1 \to 0\}
+\end{align*}
+
+\textbf{Complexity:} $O(|\Delta|)$ per update, not $O(\text{total})$.
+
+\subsection{Reducers for DCE}
+
+The client maintains four reducers:
+\begin{align*}
+\mathsf{declsReducer} &: \mathsf{File} \to \mathcal{P}(\mathsf{Name}) \to \mathcal{P}(\mathsf{Name}) \\
+\mathsf{refsReducer} &: \mathsf{File} \to \mathcal{P}(\mathsf{Name} \times \mathsf{Name}) \to \mathcal{P}(\mathsf{Name} \times \mathsf{Name}) \\
+\mathsf{annotReducer} &: \mathsf{File} \to (\mathsf{Name} \rightharpoonup \mathsf{Annot}) \to (\mathsf{Name} \rightharpoonup \mathsf{Annot}) \\
+\mathsf{optArgCallsReducer} &: \mathsf{File} \to \mathcal{P}(\mathsf{Call}) \to \mathcal{P}(\mathsf{Call})
+\end{align*}
+
+Aggregated views are now derived from reducers:
+\begin{align*}
+\mathsf{allDecls} &= \mathsf{declsReducer}.\mathsf{current}() \\
+\mathsf{allRefs} &= \mathsf{refsReducer}.\mathsf{current}() \\
+\mathsf{allAnnotations} &= \mathsf{annotReducer}.\mathsf{current}() \\
+\mathsf{allOptArgCalls} &= \mathsf{optArgCallsReducer}.\mathsf{current}()
+\end{align*}
+
+\subsection{Update Flow}
+
+When fragment $(f, t)$ arrives with new value $v$:
+\begin{enumerate}
+  \item $\Delta = \mathsf{reducer}_t.\mathsf{setContribution}(f, v)$ \quad ($O(|\Delta|)$)
+  \item Use $\Delta$ to update base/step for fixpoint \quad ($O(|\Delta|)$)
+  \item Apply fixpoint changes \quad ($O(|\Delta| + \text{cascade})$)
+\end{enumerate}
+
+Total: $O(|\Delta|)$, not $O(\text{total files})$.
+
+\subsection{Fixpoint Combinator}
+
+The client uses \texttt{SkipruntimeFixpoint} to maintain the live set incrementally.
+
+\subsubsection{Base Set}
+
+A declaration is in the base if live without needing references:
+\[
+\mathsf{base} = \{d \mid \mathsf{allAnnotations}(d) = \mathsf{live}\} \cup \{d \mid \mathsf{hasExternalRef}(d)\}
+\]
+
+where:
+\[
+\mathsf{hasExternalRef}(d) \iff \exists s \in \mathsf{refsByTarget}(d).\, s \notin \mathsf{allDecls}
+\]
+
+\subsubsection{Step Edges}
+
+Edges propagate liveness, filtered by \texttt{@dead}:
+\[
+\mathsf{stepEdges} = \{(s, d) \mid d \in \mathsf{refsByTarget}(s) \land \mathsf{allAnnotations}(s) \neq \mathsf{dead}\}
+\]
+
+\subsubsection{Fixpoint}
+
+The live set is the least fixpoint:
+\[
+\mathsf{live} = \mu X.\, \mathsf{base} \cup \{d \mid \exists s \in X.\, (s, d) \in \mathsf{stepEdges}\}
+\]
+
+\subsubsection{Incremental Updates}
+
+When a reducer delta $\Delta_{\mathsf{agg}}$ arrives, compute the corresponding fixpoint deltas:
+\begin{itemize}
+  \item From $\Delta_{\mathsf{annot}}$: compute $\Delta\mathsf{base}^{\pm}$ (live annotations) and $\Delta\mathsf{step}^{\pm}$ (dead blocks)
+  \item From $\Delta_{\mathsf{refs}}$: compute $\Delta\mathsf{base}^{\pm}$ (external refs) and $\Delta\mathsf{step}^{\pm}$ (edges)
+  \item From $\Delta_{\mathsf{decls}}$: compute $\Delta\mathsf{base}^{\pm}$ (external ref changes)
+\end{itemize}
+
+Then apply:
+\[
+\mathsf{applyChanges}(\Delta\mathsf{base}^+, \Delta\mathsf{base}^-, \Delta\mathsf{step}^+, \Delta\mathsf{step}^-)
+\]
+
+The fixpoint combinator handles propagation with cost $O(|\Delta| + \text{cascade})$.
+
+\section{Layer 3: Incremental Derived Analyses}
+
+Additional analyses depend on the live set. While these don't use Skip combinators, they can be \textbf{incrementally updated} using the fixpoint's change notifications.
+
+\subsection{Fixpoint Change Notifications}
+
+The \texttt{applyChanges} method returns which elements changed:
+\begin{verbatim}
+type changes = {
+  added: array<string>,   // Elements that became live
+  removed: array<string>, // Elements that became dead
+}
+\end{verbatim}
+
+This enables incremental updates to derived analyses.
+
+\subsection{Optional Arguments (Incremental)}
+
+\textbf{Depends on:} $\mathsf{live}$ (from fixpoint) + $\mathsf{optArgCalls}$ (from fragments)
+
+\textbf{Aggregated call data:}
+\[
+\mathsf{allOptArgCalls} = \bigcup_f \mathsf{optArgCalls}_f \quad : \quad \mathcal{P}(\mathsf{Name} \times \mathsf{Name} \times \mathcal{P}(\mathsf{ArgName}))
+\]
+
+For each function $f$ with optional arguments, the used args (from live callers only) are:
+\[
+\mathsf{usedArgs}(f) = \bigcup_{\substack{(c, f, A) \in \mathsf{allOptArgCalls} \\ c \in \mathsf{live}}} A
+\]
+
+\textbf{Key insight:} Track provenance to enable incremental updates:
+\[
+\mathsf{usedArgsWithProvenance} : \mathsf{Name} \to \mathsf{ArgName} \to \mathcal{P}(\mathsf{Name})
+\]
+where $\mathsf{usedArgsWithProvenance}(f)(a) = \{c \mid (c, f, A) \in \mathsf{allOptArgCalls} \land a \in A \land c \in \mathsf{live}\}$.
+
+\textbf{Incremental update algorithm:}
+
+First, build an index by caller:
+\[
+\mathsf{callsByCaller}(c) = \{(f, A) \mid (c, f, A) \in \mathsf{allOptArgCalls}\}
+\]
+
+Then, when the fixpoint changes:
+\begin{enumerate}
+  \item For each $c \in \mathsf{changes.added}$ (caller became live):
+    \begin{itemize}
+      \item For each $(f, A) \in \mathsf{callsByCaller}(c)$:
+      \item For each $a \in A$: add $c$ to $\mathsf{usedArgsWithProvenance}(f)(a)$
+    \end{itemize}
+  \item For each $c \in \mathsf{changes.removed}$ (caller became dead):
+    \begin{itemize}
+      \item For each $(f, A) \in \mathsf{callsByCaller}(c)$:
+      \item For each $a \in A$: remove $c$ from $\mathsf{usedArgsWithProvenance}(f)(a)$
+    \end{itemize}
+\end{enumerate}
+
+\textbf{Complexity:} $O(|\mathsf{changes}| \cdot \bar{k})$ where $\bar{k}$ is the average calls per declaration.
+
+\textbf{Implementation:}
+\begin{verbatim}
+let changes = fixpoint->applyChanges(...)
+
+// Incremental update using fixpoint changes
+changes.removed->Array.forEach(removeCallerFromUsedArgs)
+changes.added->Array.forEach(addCallerToUsedArgs)
+\end{verbatim}
+
+\subsection{Module-Level Deadness}
+
+\textbf{Depends on:} $\mathsf{live}$ (from fixpoint) + module membership
+
+A module is dead iff all its declarations are dead:
+\[
+\mathsf{moduleDead}(m) \iff \forall d \in m.\, d \notin \mathsf{live}
+\]
+
+This can also be updated incrementally using change notifications, but the benefit is smaller (module count is typically much less than declaration count).
+
+\section{Example: Adding a New Live Caller}
+
+When \texttt{feature.res} is added with \texttt{@live} annotation and calls \texttt{utils(\char`\~timezone)}:
+
+\begin{enumerate}
+  \item \textbf{Layer 1 (Skip Runtime):} Server sends 4 fragment deltas for the new file
+  \item \textbf{Layer 2 (Fixpoint):}
+    \begin{itemize}
+      \item $\Delta\mathsf{base}^+ = \{\mathsf{feature}\}$ (new @live annotation)
+      \item $\mathsf{applyChanges}$ returns $\mathsf{changes.added} = [\mathsf{feature}, \mathsf{dead\_util}]$
+    \end{itemize}
+  \item \textbf{Layer 3 (Incremental):}
+    \begin{itemize}
+      \item For $\mathsf{feature} \in \mathsf{changes.added}$:
+      \item Look up $\mathsf{optArgCallsByCaller}(\mathsf{feature}) = [(\mathsf{utils}, [\mathsf{\char`\~timezone}])]$
+      \item Add $\mathsf{feature}$ to $\mathsf{usedArgsWithProvenance}(\mathsf{utils})(\mathsf{\char`\~timezone})$
+      \item Result: $\mathsf{\char`\~timezone}$ now marked as used!
+    \end{itemize}
+\end{enumerate}
+
+Total optional args work: process 1 caller's calls---not recompute from all callers.
+
+\section{Combinator Boundary Summary}
+
+\begin{center}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Component} & \textbf{Combinator} & \textbf{Incremental?} \\
+\hline
+Server dis-aggregation & Skip Mapper & Per-fragment deltas \\
+SSE delta streaming & Skip Runtime & Only changed fragments \\
+Client aggregation & \texttt{ClientReducer} & $O(\Delta)$ per fragment \\
+Liveness fixpoint & \texttt{SkipruntimeFixpoint} & $O(\Delta + \text{cascade})$ \\
+\hline
+Optional args analysis & (uses \texttt{changes}) & Yes, via provenance \\
+Module deadness & (uses \texttt{changes}) & Yes (optional) \\
+Issue reporting & --- & Full recompute (cheap) \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{Key insight:} \texttt{ClientReducer} + fixpoint \texttt{changes} enable end-to-end $O(\Delta)$ updates.
+
+\section{Performance Characteristics}
+
+\begin{center}
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Operation} & \textbf{Complexity} & \textbf{Layer} \\
+\hline
+Server dis-aggregation & $O(|\mathsf{fileData}|)$ per file & 1 \\
+Network transfer & $O(|\text{changed fragments}|)$ & 1 \\
+Client aggregation (\texttt{ClientReducer}) & $O(|\Delta_{\mathsf{fragment}}|)$ & 2 \\
+Fixpoint delta computation & $O(|\Delta_{\mathsf{agg}}|)$ & 2 \\
+Fixpoint propagation & $O(|\Delta| + \text{cascade})$ & 2 \\
+Optional args update & $O(|\mathsf{changes}| \cdot \bar{k})$ & 3 \\
+Module deadness & $O(|\mathsf{changes}|)$ & 3 \\
+\hline
+\end{tabular}
+\end{center}
+
+\textbf{Key wins:}
+\begin{itemize}
+  \item \textbf{End-to-end $O(\Delta)$}: Each layer processes only what changed
+  \item \textbf{No full scans}: No iteration over all files or all declarations
+  \item \textbf{Composable}: Reducer deltas feed fixpoint deltas feed derived analyses
+\end{itemize}
+
+\section{References}
+
+\begin{itemize}
+  \item \texttt{dce\_reactive\_view.tex} --- Simple DCE model
+  \item \texttt{examples/ReanalyzeDCEService.ts} --- Server implementation (Layer 1)
+  \item \texttt{examples/ReanalyzeDCEHarness.res} --- Client implementation (Layers 2--3)
+  \item \texttt{reanalyze/src/DeadCommon.ml} --- Original batch implementation
+\end{itemize}
+
+\end{document}

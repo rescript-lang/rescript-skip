@@ -1,0 +1,23 @@
+You are a deep research assistant.
+Goal: collect realistic streaming and windowed aggregation examples from popular systems, to use as targets for Skip’s expressivity.
+
+1. Focus on:
+   - Apache Flink (especially Table/SQL UDAF examples),
+   - Kafka Streams (KTable aggregations),
+   - Microsoft Trill,
+   - Apache Beam and Spark Streaming,
+   - Materialize (streaming SQL).
+2. For each system, look at official docs, tutorials, and blog posts showing:
+   - Sliding-window, tumbling-window, session-window aggregations.
+   - Per-key metrics, running totals, averages, min/max, histograms, top-K, approximate distinct, and time-based summaries.
+3. For each distinct example pattern, record:
+   - System plus link to the example.
+   - Informal description of the aggregation (what it computes).
+   - Whether it uses explicit add/remove/inverse logic, or only append-style updates.
+   - Whether the aggregation could in principle be expressed as:
+     - a per-key multiset fold with an invertible accumulator, or
+     - something that inherently depends on windows/order/holistic properties.
+4. Output:
+   - A grouped list of about 20–40 patterns, with a 1–2 sentence description each.
+   - A brief note for each pattern on whether it looks compatible with a Skip-style well-formed reducer with enriched state, or clearly outside that model.
+

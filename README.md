@@ -181,10 +181,12 @@ npm run build && node examples/LiveHarness.res.js
 ## What else is in the repo
 
 ### Bindings (`bindings/`)
-- **`SkipruntimeCore.res`**: Core types, collections (`EagerCollection`, `LazyCollection`), operators (`map`, `reduce`, `mapReduce`), `Mapper`/`Reducer`/`LazyCompute` factories, notifiers, service instances.
+- **`SkipruntimeCore.res`**: Core types, collections (`EagerCollection`, `LazyCollection`), operators (`map`, `reduce`, `mapReduce`, `slice`, `take`, `merge`), `Mapper`/`Reducer`/`LazyCompute` factories, notifiers, service instances.
 - **`SkipruntimeHelpers.res`**: HTTP broker (`SkipServiceBroker`), built-in reducers (`Sum`, `Min`, `Max`, `Count`), external service helpers (`PolledExternalService`, `SkipExternalService`), leader-follower topology (`asLeader`, `asFollower`).
 - **`SkipruntimeServer.res`**: `runService` to start HTTP/SSE servers.
 - **`SkipruntimeCoreHelpers.mjs`**: JS helpers for class constructors, enums, and SSE utilities (`subscribeSSE` for streaming).
+- **`Fixpoint.res`/`SkipruntimeFixpoint.res`**: Managed fixpoint API for iterative graph algorithms (reachability, shortest paths, etc.).
+- **`ClientReducer.res`**: Client-side incremental aggregation with provenance tracking. `SetReducer`, `MapReducer`, `ArrayReducer` for O(Δ) updates when sources change.
 
 ### Examples (`examples/`)
 - **`LiveClient.res`**: Main demo—starts a service, reads/updates via HTTP, subscribes via SSE.
@@ -192,6 +194,30 @@ npm run build && node examples/LiveHarness.res.js
 - **`Example.res`**: Binding smoke test—`LoadStatus`, errors, mapper/reducer wiring—without starting the runtime.
 - **`NotifierExample.res`**: Demonstrates notifier callbacks receiving collection updates and watermarks.
 - **`LiveService.ts`**: Minimal service definition for `LiveClient` (echo resource mirroring input).
+- **`DCEExample.res`**: Dead code elimination using the managed fixpoint API—demonstrates incremental graph reachability.
+- **`ReanalyzeDCEHarness.res` + `ReanalyzeDCEService.ts`**: Full reactive Reanalyze DCE implementation with three layers: server dis-aggregation, client-side `ClientReducer` for incremental aggregation, and `SkipruntimeFixpoint` for liveness. Demonstrates end-to-end O(Δ) updates.
+- **`FixpointTest.res`**: Unit tests for the fixpoint API.
+- **`JsonOrderingHarness.res` + `JsonOrderingService.ts`**: Tests Skip's JSON key ordering semantics (type ordering, no key collisions).
+- **`BoolKVHarness.res` + `BoolKVService.ts`**: Tests boolean key handling.
+
+### Research & Analysis
+- **`skip_local_reactive_expressivity.tex`**: Main paper—proves expressive equivalence between Skip's combinators and relational algebra with aggregates. Identifies `filterNotMatchingOn` as the single missing operator needed for RA completeness.
+- **`EXAMPLES_PRIMITIVES_ANALYSIS.md`**: Detailed analysis of 50 reactive service examples (48 core + 2 anti-join patterns), classifying each by what primitives it needs (structural, reducer, compute node).
+- **`examples_all.tex`** + category files: LaTeX catalogue of the 50 examples organized by pattern (per-key aggregates, windowed views, graph metrics, anti-join patterns, etc.).
+- **`dce_reactive_view.tex`**: Case study on simple reactive dead code elimination.
+- **`reanalyze_reactive_view.tex`**: Full reactive Reanalyze DCE architecture—three-layer design with `ClientReducer` for aggregation, `SkipruntimeFixpoint` for liveness, and incremental optional args analysis.
+- **`incremental_fixpoint_notes.tex`**: Notes on incremental fixpoint computation.
+- **`reduce.tex`**: Notes on reducer semantics and well-formedness.
+- **`REACTIVE_CALCULUS_NOTES.md`**, **`PLAN.md`**: Working notes and planning documents.
+
+### Lean Formalisation (`lean-formalisation/`)
+- **`ReactiveRel.lean`**: Main formalisation—defines combinator and RA expression types, their semantics, compilation functions in both directions, and soundness/completeness proofs.
+- **`DCE.lean`** + `DCE/`: Formalisation of reactive dead code elimination with two-layer architecture (aggregation + graph algorithm).
+- **`IncrementalFixpoint.lean`**, **`Reduce.lean`**: Additional formalisations for fixpoint and reducer properties.
+- **`README.md`**: Documentation for the Lean proofs.
+
+### Research Prompts (`research/`)
+Deep research prompts and results covering: Skip ecosystem, streaming analytics, FRP/UI patterns, incremental databases, and coverage analysis.
 
 ## The bottom line
 

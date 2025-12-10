@@ -7,5 +7,9 @@ lib/
 *.cmj
 *.cmi
 *.rei
-reduce.aux
-reduce.log
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.toc
+*.out

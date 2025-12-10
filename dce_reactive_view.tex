@@ -1,0 +1,99 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+
+\title{Reactive DCE: Distributed Graph Aggregation + Incremental Fixpoint}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Overview}
+
+This document describes how Dead Code Elimination (DCE) can be implemented as a two-layer reactive system:
+\begin{enumerate}
+  \item \textbf{Layer 1 (Reactive Aggregation)}: Combine file fragments into a global graph using reducers.
+  \item \textbf{Layer 2 (Incremental Fixpoint)}: Maintain the live set using the generic incremental fixpoint combinator from \texttt{incremental\_fixpoint\_notes.tex}.
+\end{enumerate}
+
+DCE is an instance of incremental fixpoint where:
+\[
+\mathsf{base} = \mathsf{roots}, \quad \mathsf{stepFwd}(u) = \{v \mid (u,v) \in \mathsf{edges}\}
+\]
+
+\section{Layer 1: Distributed Graph Aggregation}
+
+In a distributed system, the program graph is spread across files. Each file contributes a \emph{fragment}:
+\[
+f = (\mathsf{nodes}_f, \mathsf{roots}_f, \mathsf{edges}_f)
+\]
+
+We aggregate fragments into a global graph using multiset union:
+\[
+G = \bigoplus_i f_i = \left(\sum_i \mathsf{nodes}_i,\ \sum_i \mathsf{roots}_i,\ \sum_i \mathsf{edges}_i\right)
+\]
+
+\paragraph{Reducer operations.}
+\begin{align*}
+\iota &= (\emptyset, \emptyset, \emptyset) \\
+G \oplus f &= (G.\mathsf{nodes} + f.\mathsf{nodes},\ G.\mathsf{roots} + f.\mathsf{roots},\ G.\mathsf{edges} + f.\mathsf{edges}) \\
+G \ominus f &= (G.\mathsf{nodes} - f.\mathsf{nodes},\ G.\mathsf{roots} - f.\mathsf{roots},\ G.\mathsf{edges} - f.\mathsf{edges})
+\end{align*}
+
+This reducer is well-formed: $(G \oplus f) \ominus f = G$ (multiset cancellation).
+
+\paragraph{Deduplication.}
+The incremental fixpoint operates on sets, not multisets. Before passing to Layer 2:
+\begin{itemize}
+  \item $\mathsf{roots} = \{r \mid G.\mathsf{roots}(r) > 0\}$ (elements with positive count)
+  \item $\mathsf{edges} = \{(u,v) \mid G.\mathsf{edges}(u,v) > 0\}$
+\end{itemize}
+
+\section{Layer 2: Incremental Fixpoint}
+
+Given the aggregated graph $G$, the live set is defined as:
+\[
+\mathsf{live} = \mathsf{lfp}(F) \quad \text{where} \quad F(S) = \mathsf{roots} \cup \{v \mid \exists u \in S.\, (u,v) \in \mathsf{edges}\}
+\]
+
+This is exactly the pattern handled by the generic incremental fixpoint combinator. See \texttt{incremental\_fixpoint\_notes.tex} for:
+\begin{itemize}
+  \item The expansion algorithm (BFS) for when roots/edges are added
+  \item The contraction algorithm (well-founded cascade) for when roots/edges are removed
+  \item Correctness proofs (formalized in Lean)
+  \item Complexity analysis (delta-bounded)
+\end{itemize}
+
+\section{Skip Service Architecture}
+
+A Skip service implementing reactive DCE:
+
+\begin{enumerate}
+  \item \textbf{File collection}: \texttt{files : EagerCollection<FileId, Fragment>}
+  
+  \item \textbf{Graph aggregation} (Layer 1): Use \texttt{reduce} with the fragment reducer to produce a single \texttt{GraphState}.
+  
+  \item \textbf{Live set} (Layer 2): Use the managed fixpoint API (\texttt{SkipruntimeFixpoint}) with:
+  \begin{itemize}
+    \item \texttt{base} = deduped roots from the aggregated graph
+    \item \texttt{step} = deduped edges from the aggregated graph
+  \end{itemize}
+  
+  \item \textbf{Dead set}: \texttt{nodes} $\setminus$ \texttt{live}
+\end{enumerate}
+
+When files change, Layer 1 updates the aggregated graph, and Layer 2 incrementally updates the live set using the fixpoint combinator's \texttt{applyDelta}.
+
+\section{References}
+
+\begin{itemize}
+  \item \texttt{incremental\_fixpoint\_notes.tex} --- Generic incremental fixpoint theory and algorithms
+  \item \texttt{IncrementalFixpoint.lean} --- Formal correctness proofs
+  \item \texttt{reduce.tex} --- Reducer calculus for reactive aggregation
+\end{itemize}
+
+\end{document}
