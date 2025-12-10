@@ -51,3 +51,4 @@ Background: We have catalogued 48 reactive service examples (aggregations, joins
    - Any patterns that are particularly challenging to maintain incrementally.
 
 
+
