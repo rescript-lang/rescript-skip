@@ -99,6 +99,52 @@ let removeEdge = (service: dceService, from: string, to_: string): SkipruntimeFi
 let log = Console.log
 let logArray = (label, arr) =>
   Console.log(label ++ ": [" ++ arr->Array.toSorted(String.compare)->Array.join(", ") ++ "]")
+let logCounts = (label, service) => {
+  let live = getLiveSet(service)
+  let dead = getDeadSet(service)
+  Console.log2(
+    label,
+    {
+      "live": live->Array.length,
+      "dead": dead->Array.length,
+    },
+  )
+}
+
+// Naive BFS reachability from roots - general algorithm that works on any graph
+let naiveReachability = (~roots: array<int>, ~edges: Map.t<int, array<int>>, ~nodeCount: int) => {
+  let visited = Set.make()
+  let queue = []
+
+  // Start from all roots
+  roots->Array.forEach(root => {
+    if !(visited->Set.has(root)) {
+      visited->Set.add(root)->ignore
+      queue->Array.push(root)->ignore
+    }
+  })
+
+  // BFS traversal
+  let head = ref(0)
+  while head.contents < queue->Array.length {
+    let current = queue->Array.getUnsafe(head.contents)
+    head.contents = head.contents + 1
+
+    switch edges->Map.get(current) {
+    | Some(neighbors) =>
+      neighbors->Array.forEach(neighbor => {
+        if !(visited->Set.has(neighbor)) {
+          visited->Set.add(neighbor)->ignore
+          queue->Array.push(neighbor)->ignore
+        }
+      })
+    | None => ()
+    }
+  }
+
+  let liveCount = visited->Set.size
+  (liveCount, nodeCount - liveCount)
+}
 
 // ============================================================================
 // Demo: A small program
@@ -254,5 +300,253 @@ let alternativePathDemo = () => {
   log("Alternative path demo complete!")
 }
 
+// ============================================================================
+// Stress tests (incremental vs naive full recompute)
+// ============================================================================
+
+// Build a tree graph: each node has `branching` children
+// Returns (nodeNames, edges as Map, edges as array for DCE service, height)
+let buildTreeGraph = (~branching: int, ~height: int) => {
+  let edges = Map.make()
+  let edgesArray = []
+  let nodeNames = []
+  
+  let nodeId = ref(0)
+  
+  // BFS to build tree level by level
+  let currentLevel = ref([0])
+  nodeNames->Array.push("node-0")->ignore
+  nodeId.contents = 1
+  
+  for _level in 1 to height {
+    let nextLevel = []
+    currentLevel.contents->Array.forEach(parent => {
+      let children = []
+      for _child in 1 to branching {
+        let childId = nodeId.contents
+        nodeId.contents = nodeId.contents + 1
+        children->Array.push(childId)->ignore
+        nextLevel->Array.push(childId)->ignore
+        nodeNames->Array.push("node-" ++ childId->Int.toString)->ignore
+      }
+      edges->Map.set(parent, children)->ignore
+      let childNames = children->Array.map(c => "node-" ++ c->Int.toString)
+      edgesArray->Array.push(("node-" ++ parent->Int.toString, childNames))->ignore
+    })
+    currentLevel.contents = nextLevel
+  }
+  
+  (nodeNames, edges, edgesArray, height)
+}
+
+// Count nodes in subtree rooted at given node
+let countSubtree = (edges: Map.t<int, array<int>>, root: int) => {
+  let count = ref(0)
+  let queue = [root]
+  let head = ref(0)
+  while head.contents < queue->Array.length {
+    let current = queue->Array.getUnsafe(head.contents)
+    head.contents = head.contents + 1
+    count.contents = count.contents + 1
+    switch edges->Map.get(current) {
+    | Some(children) => children->Array.forEach(c => queue->Array.push(c)->ignore)
+    | None => ()
+    }
+  }
+  count.contents
+}
+
+let stressBenchmark = (
+  ~nodeNames: array<string>,
+  ~naiveEdges: Map.t<int, array<int>>,
+  ~edgesArray: array<(string, array<string>)>,
+  ~editCount: int,
+  ~cutParent: int,
+  ~cutChild: int,
+  ~label: string,
+) => {
+  let nodeCount = nodeNames->Array.length
+  log("")
+  log("=================================================================")
+  log(label)
+  log("=================================================================")
+  
+  let subtreeSize = countSubtree(naiveEdges, cutChild)
+  Console.log2("Subtree being cut", {"parent": cutParent, "child": cutChild, "subtree_size": subtreeSize})
+  log("")
+
+  // --- Setup for incremental (NOT timed) ---
+  log("Setting up incremental service (not timed)...")
+  let service = makeDCEService(~nodes=nodeNames, ~roots=["node-0"], ~edges=edgesArray)
+
+  let fromNode = "node-" ++ cutParent->Int.toString
+  let toNode = "node-" ++ cutChild->Int.toString
+
+  // Store original children for naive
+  let originalChildren = naiveEdges->Map.get(cutParent)->Option.getOr([])
+
+  // Verify initial state
+  let incInitLive = getLiveSet(service)->Array.length
+  Console.log2("Initial", {"live": incInitLive, "dead": nodeCount - incInitLive})
+  log("")
+
+  // --- Incremental: measure edits ---
+  log("--- Incremental: " ++ editCount->Int.toString ++ " edits ---")
+  let incTotalMs = ref(0.0)
+  for edit in 1 to editCount {
+    let startMs = Date.now()
+    if Int.mod(edit, 2) == 1 {
+      removeEdge(service, fromNode, toNode)->ignore
+    } else {
+      addEdge(service, fromNode, toNode)->ignore
+    }
+    let elapsedMs = Date.now() -. startMs
+    incTotalMs.contents = incTotalMs.contents +. elapsedMs
+    // Show first few edits as examples
+    if edit <= 4 {
+      let live = getLiveSet(service)->Array.length
+      let dead = nodeCount - live
+      let action = if Int.mod(edit, 2) == 1 { "remove" } else { "add" }
+      Console.log2(
+        "  Edit " ++ edit->Int.toString ++ " (" ++ action ++ ")",
+        {"ms": elapsedMs, "live": live, "dead": dead},
+      )
+    } else if edit == 5 {
+      log("  ...")
+    }
+  }
+  let incFinalLive = getLiveSet(service)->Array.length
+  let incFinalDead = nodeCount - incFinalLive
+  Console.log2("  Final state", {"live": incFinalLive, "dead": incFinalDead})
+  log("")
+
+  // --- Naive BFS: measure edits ---
+  log("--- Naive BFS: " ++ editCount->Int.toString ++ " edits with full recompute ---")
+  let naiveTotalMs = ref(0.0)
+  let naiveRoots = [0]
+  let naiveLive = ref(0)
+  let naiveDead = ref(0)
+  for edit in 1 to editCount {
+    // Apply the edit: remove or restore the child
+    if Int.mod(edit, 2) == 1 {
+      let withoutChild = originalChildren->Array.filter(c => c != cutChild)
+      naiveEdges->Map.set(cutParent, withoutChild)->ignore
+    } else {
+      naiveEdges->Map.set(cutParent, originalChildren)->ignore
+    }
+    // Time the full recompute
+    let startMs = Date.now()
+    let (live, dead) = naiveReachability(~roots=naiveRoots, ~edges=naiveEdges, ~nodeCount)
+    let elapsedMs = Date.now() -. startMs
+    naiveTotalMs.contents = naiveTotalMs.contents +. elapsedMs
+    naiveLive.contents = live
+    naiveDead.contents = dead
+    // Show first few edits as examples
+    if edit <= 4 {
+      let action = if Int.mod(edit, 2) == 1 { "remove" } else { "add" }
+      Console.log2(
+        "  Edit " ++ edit->Int.toString ++ " (" ++ action ++ ")",
+        {"ms": elapsedMs, "live": live, "dead": dead},
+      )
+    } else if edit == 5 {
+      log("  ...")
+    }
+  }
+  Console.log2("  Final state", {"live": naiveLive.contents, "dead": naiveDead.contents})
+  
+  // Restore edges for next test
+  naiveEdges->Map.set(cutParent, originalChildren)->ignore
+  log("")
+
+  // Summary
+  let speedup = naiveTotalMs.contents /. incTotalMs.contents
+  Console.log2(
+    "TOTAL",
+    {
+      "incremental_ms": incTotalMs.contents,
+      "naive_ms": naiveTotalMs.contents,
+      "speedup": speedup,
+    },
+  )
+  if speedup > 1.0 {
+    log("✓ Incremental is " ++ speedup->Float.toFixed(~digits=1) ++ "x faster")
+  } else {
+    log("✗ Naive is " ++ (1.0 /. speedup)->Float.toFixed(~digits=1) ++ "x faster")
+  }
+}
+
+let runBenchmarks = () => {
+  log("")
+  log("DCE Benchmark: Incremental vs Naive BFS Reachability")
+  log("=====================================================")
+  log("")
+  log("Graph: Tree with branching factor 10, height 5")
+  log("  - This models a realistic call graph")
+  log("  - Height 5 = max call chain depth of 5")
+  log("")
+  
+  // Build tree: branching=10, height=5 gives 1+10+100+1000+10000+100000 = 111,111 nodes
+  let (nodeNames, naiveEdges, edgesArray, height) = buildTreeGraph(~branching=10, ~height=5)
+  let nodeCount = nodeNames->Array.length
+  Console.log2("Tree structure", {"nodes": nodeCount, "branching": 10, "height": height})
+  log("")
+  log("Complexity:")
+  log("- Incremental: O(affected subtree size)")
+  log("- Naive BFS: O(total nodes) every time")
+  log("")
+
+  // Scenario 1: Cut a leaf's parent edge (affects 1 node)
+  // Pick a node at depth 5 (leaf level) - node 11111 is first leaf
+  // Its parent is at depth 4
+  let leafNode = 11111  // A leaf node
+  let leafParent = 1111 // Its parent
+  stressBenchmark(
+    ~nodeNames,
+    ~naiveEdges,
+    ~edgesArray,
+    ~editCount=100,
+    ~cutParent=leafParent,
+    ~cutChild=leafNode,
+    ~label="SCENARIO 1: Cut LEAF edge (subtree = 1 node)",
+  )
+
+  // Scenario 2: Cut edge at depth 3 (affects ~111 nodes)
+  // Node 111 is at depth 3, its parent is 11
+  let midNode = 111
+  let midParent = 11
+  stressBenchmark(
+    ~nodeNames,
+    ~naiveEdges,
+    ~edgesArray,
+    ~editCount=100,
+    ~cutParent=midParent,
+    ~cutChild=midNode,
+    ~label="SCENARIO 2: Cut MID-LEVEL edge (subtree = 111 nodes)",
+  )
+
+  // Scenario 3: Cut edge near root (affects ~11111 nodes)
+  // Node 1 is child of root 0
+  let nearRootNode = 1
+  let rootNode = 0
+  stressBenchmark(
+    ~nodeNames,
+    ~naiveEdges,
+    ~edgesArray,
+    ~editCount=10,
+    ~cutParent=rootNode,
+    ~cutChild=nearRootNode,
+    ~label="SCENARIO 3: Cut NEAR-ROOT edge (subtree = 11111 nodes)",
+  )
+
+  log("")
+  log("=================================================================")
+  log("CONCLUSION")
+  log("=================================================================")
+  log("Incremental wins when editing deep in the tree (small subtrees).")
+  log("This is the common case: most code edits affect leaf functions.")
+  log("")
+}
+
 demo()
 alternativePathDemo()
+runBenchmarks()
